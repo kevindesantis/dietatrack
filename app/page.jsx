@@ -1,1 +1,855 @@
+'use client';
 
+import { useEffect, useMemo, useState } from 'react';
+import { supabase } from '../lib/supabaseClient';
+import {
+  calculateNutrition,
+  estimateTargets,
+  mealTypes,
+  remaining,
+  round,
+  sumLogs,
+  todayISO,
+  weekdays
+} from '../lib/nutrition';
+
+const emptyProfile = {
+  name: '',
+  sex: 'maschio',
+  birth_date: '',
+  height_cm: '',
+  activity_level: 'sedentario',
+  start_weight: '',
+  current_weight: '',
+  target_weight: '',
+  target_date: '',
+  goal_notes: ''
+};
+
+const emptyTarget = {
+  kcal_target: 2000,
+  protein_target: 140,
+  carbs_target: 220,
+  fat_target: 65
+};
+
+export default function Home() {
+  const [session, setSession] = useState(null);
+  const [authMode, setAuthMode] = useState('login');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [message, setMessage] = useState('');
+  const [loading, setLoading] = useState(true);
+  const [tab, setTab] = useState('oggi');
+  const [selectedDate, setSelectedDate] = useState(todayISO());
+
+  const [profile, setProfile] = useState(emptyProfile);
+  const [foods, setFoods] = useState([]);
+  const [foodSearch, setFoodSearch] = useState('');
+  const [selectedFoodId, setSelectedFoodId] = useState('');
+  const [grams, setGrams] = useState('100');
+  const [mealType, setMealType] = useState('pranzo');
+  const [logs, setLogs] = useState([]);
+  const [target, setTarget] = useState(emptyTarget);
+  const [dailyStatus, setDailyStatus] = useState('non_registrata');
+  const [measurements, setMeasurements] = useState([]);
+  const [plannedOptions, setPlannedOptions] = useState([]);
+  const [workouts, setWorkouts] = useState([]);
+  const [workoutLog, setWorkoutLog] = useState(null);
+
+  const [manualFood, setManualFood] = useState({
+    name: '', brand: '', category: '', barcode: '', kcal_100g: '', protein_100g: '', carbs_100g: '', fat_100g: '', fiber_100g: '', sugar_100g: '', salt_100g: ''
+  });
+  const [barcode, setBarcode] = useState('');
+  const [measurementForm, setMeasurementForm] = useState({ weight: '', waist: '', hips: '', chest: '', abdomen: '', arm: '', thigh: '', neck: '', notes: '' });
+  const [plannedForm, setPlannedForm] = useState({ weekday: 1, meal_type: 'pranzo', option_name: '', food_id: '', grams: 100, notes: '' });
+  const [workoutForm, setWorkoutForm] = useState({ weekday: 1, title: '', exercises: '', notes: '' });
+
+  const user = session?.user;
+  const totals = useMemo(() => sumLogs(logs), [logs]);
+  const remain = useMemo(() => remaining(target, totals), [target, totals]);
+  const currentWeekday = useMemo(() => new Date(`${selectedDate}T12:00:00`).getDay(), [selectedDate]);
+  const filteredFoods = useMemo(() => {
+    const q = foodSearch.trim().toLowerCase();
+    if (!q) return foods.slice(0, 40);
+    return foods.filter(food => `${food.name} ${food.brand || ''} ${food.category || ''} ${food.barcode || ''}`.toLowerCase().includes(q)).slice(0, 60);
+  }, [foods, foodSearch]);
+
+  useEffect(() => {
+    let mounted = true;
+    supabase.auth.getSession().then(({ data }) => {
+      if (mounted) setSession(data.session);
+      setLoading(false);
+    });
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
+      setSession(newSession);
+    });
+    return () => {
+      mounted = false;
+      listener.subscription.unsubscribe();
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!user) return;
+    loadAll();
+  }, [user, selectedDate]);
+
+  async function loadAll() {
+    setLoading(true);
+    setMessage('');
+    await Promise.all([
+      loadProfile(),
+      loadFoods(),
+      loadLogs(),
+      loadTarget(),
+      loadDailyStatus(),
+      loadMeasurements(),
+      loadPlannedOptions(),
+      loadWorkouts(),
+      loadWorkoutLog()
+    ]);
+    setLoading(false);
+  }
+
+  async function loadProfile() {
+    const { data } = await supabase.from('profiles').select('*').eq('user_id', user.id).maybeSingle();
+    if (data) setProfile({ ...emptyProfile, ...data });
+  }
+
+  async function loadFoods() {
+    const { data, error } = await supabase
+      .from('foods')
+      .select('*')
+      .or(`user_id.eq.${user.id},is_public.eq.true`)
+      .order('name');
+    if (!error) setFoods(data || []);
+  }
+
+  async function loadLogs() {
+    const { data, error } = await supabase
+      .from('food_logs')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('log_date', selectedDate)
+      .order('created_at', { ascending: true });
+    if (!error) setLogs(data || []);
+  }
+
+  async function loadTarget() {
+    const { data } = await supabase
+      .from('daily_targets')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('target_date', selectedDate)
+      .maybeSingle();
+    setTarget(data || emptyTarget);
+  }
+
+  async function loadDailyStatus() {
+    const { data } = await supabase
+      .from('daily_status')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('status_date', selectedDate)
+      .maybeSingle();
+    setDailyStatus(data?.status || 'non_registrata');
+  }
+
+  async function loadMeasurements() {
+    const { data } = await supabase
+      .from('body_measurements')
+      .select('*')
+      .eq('user_id', user.id)
+      .order('measure_date', { ascending: true });
+    setMeasurements(data || []);
+  }
+
+  async function loadPlannedOptions() {
+    const { data } = await supabase
+      .from('planned_meal_options')
+      .select('*, planned_meal_foods(*)')
+      .eq('user_id', user.id)
+      .eq('weekday', currentWeekday)
+      .order('meal_type')
+      .order('created_at');
+    setPlannedOptions(data || []);
+  }
+
+  async function loadWorkouts() {
+    const { data } = await supabase
+      .from('workout_schedule')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('weekday', currentWeekday)
+      .order('created_at');
+    setWorkouts(data || []);
+  }
+
+  async function loadWorkoutLog() {
+    const { data } = await supabase
+      .from('workout_logs')
+      .select('*')
+      .eq('user_id', user.id)
+      .eq('log_date', selectedDate)
+      .maybeSingle();
+    setWorkoutLog(data);
+  }
+
+  async function handleAuth(event) {
+    event.preventDefault();
+    setMessage('');
+    const fn = authMode === 'login' ? supabase.auth.signInWithPassword : supabase.auth.signUp;
+    const { error } = await fn({ email, password });
+    setMessage(error ? error.message : authMode === 'login' ? 'Accesso effettuato.' : 'Registrazione completata. Controlla la mail se Supabase richiede conferma.');
+  }
+
+  async function signOut() {
+    await supabase.auth.signOut();
+  }
+
+  async function saveProfile() {
+    const { error } = await supabase.from('profiles').upsert({
+      user_id: user.id,
+      ...profile,
+      height_cm: nullableNumber(profile.height_cm),
+      start_weight: nullableNumber(profile.start_weight),
+      current_weight: nullableNumber(profile.current_weight),
+      target_weight: nullableNumber(profile.target_weight),
+      updated_at: new Date().toISOString()
+    }, { onConflict: 'user_id' });
+    setMessage(error ? error.message : 'Profilo salvato.');
+  }
+
+  async function saveTarget(nextTarget = target) {
+    const payload = {
+      user_id: user.id,
+      target_date: selectedDate,
+      kcal_target: Number(nextTarget.kcal_target || 0),
+      protein_target: Number(nextTarget.protein_target || 0),
+      carbs_target: Number(nextTarget.carbs_target || 0),
+      fat_target: Number(nextTarget.fat_target || 0)
+    };
+    const { error } = await supabase.from('daily_targets').upsert(payload, { onConflict: 'user_id,target_date' });
+    setMessage(error ? error.message : 'Obiettivo giornaliero salvato.');
+    if (!error) setTarget(payload);
+  }
+
+  async function estimateAndSaveTarget() {
+    const estimated = estimateTargets(profile);
+    if (!estimated) {
+      setMessage('Inserisci sesso, data di nascita, altezza e peso per calcolare l’obiettivo.');
+      return;
+    }
+    await saveTarget(estimated);
+    setMessage(`Obiettivo stimato salvato. BMR ${estimated.bmr} kcal, mantenimento circa ${estimated.tdee} kcal. Valori indicativi.`);
+  }
+
+  async function saveManualFood() {
+    if (!manualFood.name.trim()) return setMessage('Inserisci il nome alimento.');
+    const payload = {
+      user_id: user.id,
+      name: manualFood.name.trim(),
+      brand: manualFood.brand || null,
+      category: manualFood.category || null,
+      barcode: manualFood.barcode || null,
+      kcal_100g: Number(manualFood.kcal_100g || 0),
+      protein_100g: Number(manualFood.protein_100g || 0),
+      carbs_100g: Number(manualFood.carbs_100g || 0),
+      fat_100g: Number(manualFood.fat_100g || 0),
+      fiber_100g: nullableNumber(manualFood.fiber_100g),
+      sugar_100g: nullableNumber(manualFood.sugar_100g),
+      salt_100g: nullableNumber(manualFood.salt_100g),
+      source: 'manuale',
+      is_public: false
+    };
+    const { error } = await supabase.from('foods').insert(payload);
+    if (error) return setMessage(error.message);
+    setManualFood({ name: '', brand: '', category: '', barcode: '', kcal_100g: '', protein_100g: '', carbs_100g: '', fat_100g: '', fiber_100g: '', sugar_100g: '', salt_100g: '' });
+    await loadFoods();
+    setMessage('Alimento salvato.');
+  }
+
+  async function importBarcode() {
+    if (!barcode.trim()) return setMessage('Inserisci un codice a barre.');
+    try {
+      const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode.trim()}.json`);
+      const json = await response.json();
+      if (!json.product) return setMessage('Prodotto non trovato su Open Food Facts.');
+      const p = json.product;
+      const n = p.nutriments || {};
+      const payload = {
+        user_id: user.id,
+        name: p.product_name || `Prodotto ${barcode}`,
+        brand: p.brands || null,
+        category: p.categories_tags?.[0]?.replace('en:', '') || null,
+        barcode: barcode.trim(),
+        kcal_100g: Number(n['energy-kcal_100g'] || n['energy-kcal_serving'] || 0),
+        protein_100g: Number(n.proteins_100g || 0),
+        carbs_100g: Number(n.carbohydrates_100g || 0),
+        fat_100g: Number(n.fat_100g || 0),
+        fiber_100g: Number(n.fiber_100g || 0),
+        sugar_100g: Number(n.sugars_100g || 0),
+        salt_100g: Number(n.salt_100g || 0),
+        source: 'openfoodfacts',
+        is_public: false
+      };
+      const { error } = await supabase.from('foods').upsert(payload, { onConflict: 'user_id,barcode' });
+      if (error) return setMessage(error.message);
+      setBarcode('');
+      await loadFoods();
+      setMessage('Prodotto importato da Open Food Facts. Controlla sempre i valori perché possono essere incompleti.');
+    } catch (error) {
+      setMessage('Errore durante il collegamento a Open Food Facts.');
+    }
+  }
+
+  async function addFoodLog() {
+    const food = foods.find(item => item.id === selectedFoodId);
+    if (!food) return setMessage('Seleziona un alimento.');
+    const g = Number(grams || 0);
+    if (g <= 0) return setMessage('Inserisci i grammi.');
+    const calc = calculateNutrition(food, g);
+    const payload = {
+      user_id: user.id,
+      food_id: food.id,
+      log_date: selectedDate,
+      meal_type: mealType,
+      food_name: [food.name, food.brand].filter(Boolean).join(' - '),
+      grams: g,
+      ...calc
+    };
+    const { error } = await supabase.from('food_logs').insert(payload);
+    if (error) return setMessage(error.message);
+    await Promise.all([loadLogs(), setStatus('parziale', false)]);
+    setMessage('Alimento aggiunto al diario.');
+  }
+
+  async function deleteLog(id) {
+    await supabase.from('food_logs').delete().eq('id', id).eq('user_id', user.id);
+    await loadLogs();
+  }
+
+  async function setStatus(status, showMessage = true) {
+    const { error } = await supabase.from('daily_status').upsert({
+      user_id: user.id,
+      status_date: selectedDate,
+      status
+    }, { onConflict: 'user_id,status_date' });
+    if (!error) setDailyStatus(status);
+    if (showMessage) setMessage(error ? error.message : 'Stato giornata aggiornato.');
+  }
+
+  async function saveMeasurement() {
+    const payload = {
+      user_id: user.id,
+      measure_date: selectedDate,
+      weight: nullableNumber(measurementForm.weight),
+      waist: nullableNumber(measurementForm.waist),
+      hips: nullableNumber(measurementForm.hips),
+      chest: nullableNumber(measurementForm.chest),
+      abdomen: nullableNumber(measurementForm.abdomen),
+      arm: nullableNumber(measurementForm.arm),
+      thigh: nullableNumber(measurementForm.thigh),
+      neck: nullableNumber(measurementForm.neck),
+      notes: measurementForm.notes || null
+    };
+    const { error } = await supabase.from('body_measurements').upsert(payload, { onConflict: 'user_id,measure_date' });
+    if (error) return setMessage(error.message);
+    setMeasurementForm({ weight: '', waist: '', hips: '', chest: '', abdomen: '', arm: '', thigh: '', neck: '', notes: '' });
+    await loadMeasurements();
+    setMessage('Misure salvate.');
+  }
+
+  async function savePlannedOption() {
+    const food = foods.find(item => item.id === plannedForm.food_id);
+    if (!food) return setMessage('Seleziona un alimento per la dieta programmata.');
+    const g = Number(plannedForm.grams || 0);
+    const calc = calculateNutrition(food, g);
+    const { data: option, error } = await supabase.from('planned_meal_options').insert({
+      user_id: user.id,
+      weekday: Number(plannedForm.weekday),
+      meal_type: plannedForm.meal_type,
+      option_name: plannedForm.option_name || `${food.name} ${g} g`,
+      notes: plannedForm.notes || null
+    }).select().single();
+    if (error) return setMessage(error.message);
+    const { error: itemError } = await supabase.from('planned_meal_foods').insert({
+      user_id: user.id,
+      option_id: option.id,
+      food_id: food.id,
+      food_name: [food.name, food.brand].filter(Boolean).join(' - '),
+      grams: g,
+      ...calc
+    });
+    if (itemError) return setMessage(itemError.message);
+    setPlannedForm({ weekday: plannedForm.weekday, meal_type: plannedForm.meal_type, option_name: '', food_id: '', grams: 100, notes: '' });
+    await loadPlannedOptions();
+    setMessage('Opzione dieta salvata.');
+  }
+
+  async function eatPlannedOption(option) {
+    const rows = (option.planned_meal_foods || []).map(item => ({
+      user_id: user.id,
+      food_id: item.food_id,
+      log_date: selectedDate,
+      meal_type: option.meal_type,
+      food_name: item.food_name,
+      grams: item.grams,
+      kcal: item.kcal,
+      protein: item.protein,
+      carbs: item.carbs,
+      fat: item.fat,
+      fiber: item.fiber || 0,
+      sugar: item.sugar || 0,
+      salt: item.salt || 0,
+      notes: `Da opzione: ${option.option_name}`
+    }));
+    if (!rows.length) return setMessage('Questa opzione non contiene alimenti.');
+    const { error } = await supabase.from('food_logs').insert(rows);
+    if (error) return setMessage(error.message);
+    await Promise.all([loadLogs(), setStatus('parziale', false)]);
+    setMessage('Opzione aggiunta al diario di oggi.');
+  }
+
+  async function deletePlannedOption(id) {
+    await supabase.from('planned_meal_options').delete().eq('id', id).eq('user_id', user.id);
+    await loadPlannedOptions();
+  }
+
+  async function saveWorkout() {
+    if (!workoutForm.title.trim()) return setMessage('Inserisci il titolo allenamento.');
+    const { error } = await supabase.from('workout_schedule').insert({
+      user_id: user.id,
+      weekday: Number(workoutForm.weekday),
+      title: workoutForm.title,
+      exercises: workoutForm.exercises,
+      notes: workoutForm.notes || null
+    });
+    if (error) return setMessage(error.message);
+    setWorkoutForm({ weekday: workoutForm.weekday, title: '', exercises: '', notes: '' });
+    await loadWorkouts();
+    setMessage('Allenamento salvato.');
+  }
+
+  async function setWorkoutStatus(status) {
+    const { error } = await supabase.from('workout_logs').upsert({
+      user_id: user.id,
+      log_date: selectedDate,
+      status
+    }, { onConflict: 'user_id,log_date' });
+    if (!error) await loadWorkoutLog();
+    setMessage(error ? error.message : 'Allenamento aggiornato.');
+  }
+
+  if (loading && !session) {
+    return <main className="shell center"><div className="loader">Caricamento...</div></main>;
+  }
+
+  if (!session) {
+    return (
+      <main className="authPage">
+        <section className="authCard">
+          <div className="brandMark">DT</div>
+          <h1>DietaTrack</h1>
+          <p>Web app personale per dieta, calorie, misure e allenamenti.</p>
+          <form onSubmit={handleAuth} className="formStack">
+            <label>Email<input type="email" value={email} onChange={e => setEmail(e.target.value)} placeholder="email@example.com" required /></label>
+            <label>Password<input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="almeno 6 caratteri" required /></label>
+            <button className="primary" type="submit">{authMode === 'login' ? 'Accedi' : 'Registrati'}</button>
+          </form>
+          <button className="linkBtn" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
+            {authMode === 'login' ? 'Non hai un account? Registrati' : 'Hai già un account? Accedi'}
+          </button>
+          {message && <p className="notice">{message}</p>}
+        </section>
+      </main>
+    );
+  }
+
+  return (
+    <main className="shell">
+      <header className="topbar">
+        <div>
+          <p className="eyebrow">DietaTrack</p>
+          <h1>{tab === 'oggi' ? 'Dashboard giornaliera' : labelForTab(tab)}</h1>
+        </div>
+        <button className="ghost" onClick={signOut}>Esci</button>
+      </header>
+
+      <section className="dateCard">
+        <label>Giorno<input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} /></label>
+        <div className={`statusPill ${dailyStatus}`}>{statusLabel(dailyStatus)}</div>
+      </section>
+
+      <nav className="tabs">
+        {[
+          ['oggi', 'Oggi'], ['dieta', 'Dieta'], ['alimenti', 'Alimenti'], ['misure', 'Misure'], ['allenamento', 'Allenamento'], ['profilo', 'Profilo']
+        ].map(([value, label]) => <button key={value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{label}</button>)}
+      </nav>
+
+      {message && <section className="notice stickyNotice">{message}</section>}
+
+      {tab === 'oggi' && (
+        <Dashboard
+          totals={totals}
+          target={target}
+          remain={remain}
+          logs={logs}
+          selectedDate={selectedDate}
+          mealType={mealType}
+          setMealType={setMealType}
+          filteredFoods={filteredFoods}
+          foodSearch={foodSearch}
+          setFoodSearch={setFoodSearch}
+          selectedFoodId={selectedFoodId}
+          setSelectedFoodId={setSelectedFoodId}
+          grams={grams}
+          setGrams={setGrams}
+          addFoodLog={addFoodLog}
+          deleteLog={deleteLog}
+          setStatus={setStatus}
+          targetSetter={setTarget}
+          targetSaver={saveTarget}
+          plannedOptions={plannedOptions}
+          eatPlannedOption={eatPlannedOption}
+          workouts={workouts}
+          workoutLog={workoutLog}
+          setWorkoutStatus={setWorkoutStatus}
+        />
+      )}
+
+      {tab === 'dieta' && (
+        <DietTab
+          plannedOptions={plannedOptions}
+          plannedForm={plannedForm}
+          setPlannedForm={setPlannedForm}
+          foods={foods}
+          savePlannedOption={savePlannedOption}
+          deletePlannedOption={deletePlannedOption}
+          currentWeekday={currentWeekday}
+        />
+      )}
+
+      {tab === 'alimenti' && (
+        <FoodsTab
+          foods={foods}
+          filteredFoods={filteredFoods}
+          foodSearch={foodSearch}
+          setFoodSearch={setFoodSearch}
+          manualFood={manualFood}
+          setManualFood={setManualFood}
+          saveManualFood={saveManualFood}
+          barcode={barcode}
+          setBarcode={setBarcode}
+          importBarcode={importBarcode}
+        />
+      )}
+
+      {tab === 'misure' && (
+        <MeasurementsTab
+          measurements={measurements}
+          measurementForm={measurementForm}
+          setMeasurementForm={setMeasurementForm}
+          saveMeasurement={saveMeasurement}
+        />
+      )}
+
+      {tab === 'allenamento' && (
+        <WorkoutTab
+          workouts={workouts}
+          workoutForm={workoutForm}
+          setWorkoutForm={setWorkoutForm}
+          saveWorkout={saveWorkout}
+          workoutLog={workoutLog}
+          setWorkoutStatus={setWorkoutStatus}
+        />
+      )}
+
+      {tab === 'profilo' && (
+        <ProfileTab
+          profile={profile}
+          setProfile={setProfile}
+          saveProfile={saveProfile}
+          estimateAndSaveTarget={estimateAndSaveTarget}
+          target={target}
+        />
+      )}
+    </main>
+  );
+}
+
+function Dashboard(props) {
+  const { totals, target, remain, logs, mealType, setMealType, filteredFoods, foodSearch, setFoodSearch, selectedFoodId, setSelectedFoodId, grams, setGrams, addFoodLog, deleteLog, setStatus, targetSetter, targetSaver, plannedOptions, eatPlannedOption, workouts, workoutLog, setWorkoutStatus } = props;
+
+  return (
+    <section className="grid">
+      <div className="card heroStats">
+        <div>
+          <p className="eyebrow">Calorie</p>
+          <h2>{round(totals.kcal, 0)} / {round(target.kcal_target, 0)} kcal</h2>
+          <Progress value={totals.kcal} max={target.kcal_target} />
+        </div>
+        <div className="macroGrid">
+          <Macro label="Proteine" value={totals.protein} max={target.protein_target} unit="g" />
+          <Macro label="Carboidrati" value={totals.carbs} max={target.carbs_target} unit="g" />
+          <Macro label="Grassi" value={totals.fat} max={target.fat_target} unit="g" />
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Ti mancano oggi</h3>
+        <div className="remainingGrid">
+          <strong>{round(remain.kcal, 0)}<span>kcal</span></strong>
+          <strong>{round(remain.protein, 1)}<span>proteine</span></strong>
+          <strong>{round(remain.carbs, 1)}<span>carboidrati</span></strong>
+          <strong>{round(remain.fat, 1)}<span>grassi</span></strong>
+        </div>
+      </div>
+
+      <div className="card wide">
+        <h3>Aggiungi quello che hai mangiato</h3>
+        <div className="formGrid four">
+          <label>Pasto<select value={mealType} onChange={e => setMealType(e.target.value)}>{mealTypes.map(m => <option key={m}>{m}</option>)}</select></label>
+          <label>Cerca alimento<input value={foodSearch} onChange={e => setFoodSearch(e.target.value)} placeholder="pasta, pollo, banana..." /></label>
+          <label>Alimento<select value={selectedFoodId} onChange={e => setSelectedFoodId(e.target.value)}><option value="">Seleziona</option>{filteredFoods.map(food => <option key={food.id} value={food.id}>{food.name}{food.brand ? ` - ${food.brand}` : ''}</option>)}</select></label>
+          <label>Grammi<input type="number" min="1" value={grams} onChange={e => setGrams(e.target.value)} /></label>
+        </div>
+        <button className="primary" onClick={addFoodLog}>Aggiungi al diario</button>
+      </div>
+
+      <div className="card wide">
+        <h3>Dieta prevista per oggi</h3>
+        {plannedOptions.length === 0 && <p className="muted">Non hai ancora inserito opzioni dieta per questo giorno.</p>}
+        <div className="optionList">
+          {plannedOptions.map(option => (
+            <article className="optionCard" key={option.id}>
+              <div>
+                <span className="mealBadge">{option.meal_type}</span>
+                <h4>{option.option_name}</h4>
+                <p>{(option.planned_meal_foods || []).map(f => `${f.food_name} ${f.grams} g`).join(', ')}</p>
+              </div>
+              <button className="secondary" onClick={() => eatPlannedOption(option)}>Ho mangiato questo</button>
+            </article>
+          ))}
+        </div>
+      </div>
+
+      <div className="card wide">
+        <h3>Diario di oggi</h3>
+        {mealTypes.map(meal => {
+          const mealLogs = logs.filter(log => log.meal_type === meal);
+          if (!mealLogs.length) return null;
+          return (
+            <div className="mealBlock" key={meal}>
+              <h4>{meal}</h4>
+              {mealLogs.map(log => (
+                <div className="logRow" key={log.id}>
+                  <span>{log.food_name}</span>
+                  <small>{log.grams} g · {round(log.kcal, 0)} kcal · P {log.protein} · C {log.carbs} · G {log.fat}</small>
+                  <button className="danger" onClick={() => deleteLog(log.id)}>Elimina</button>
+                </div>
+              ))}
+            </div>
+          );
+        })}
+        {!logs.length && <p className="muted">Ancora nessun alimento registrato oggi.</p>}
+      </div>
+
+      <div className="card">
+        <h3>Stato giornata</h3>
+        <div className="buttonStack">
+          <button className="secondary" onClick={() => setStatus('completata')}>Completata</button>
+          <button className="secondary" onClick={() => setStatus('sgarro')}>Sgarro</button>
+          <button className="secondary" onClick={() => setStatus('saltata')}>Ho saltato la dieta</button>
+        </div>
+      </div>
+
+      <div className="card">
+        <h3>Obiettivo calorie/macros</h3>
+        <div className="formGrid two">
+          <label>Kcal<input type="number" value={target.kcal_target} onChange={e => targetSetter({ ...target, kcal_target: e.target.value })} /></label>
+          <label>Proteine<input type="number" value={target.protein_target} onChange={e => targetSetter({ ...target, protein_target: e.target.value })} /></label>
+          <label>Carboidrati<input type="number" value={target.carbs_target} onChange={e => targetSetter({ ...target, carbs_target: e.target.value })} /></label>
+          <label>Grassi<input type="number" value={target.fat_target} onChange={e => targetSetter({ ...target, fat_target: e.target.value })} /></label>
+        </div>
+        <button className="primary" onClick={() => targetSaver(target)}>Salva obiettivo</button>
+      </div>
+
+      <div className="card wide">
+        <h3>Allenamento di oggi</h3>
+        <p className="muted">Stato: {workoutLog?.status || 'non registrato'}</p>
+        {workouts.map(w => <article key={w.id} className="workoutBox"><h4>{w.title}</h4><pre>{w.exercises}</pre>{w.notes && <p>{w.notes}</p>}</article>)}
+        {!workouts.length && <p className="muted">Nessun allenamento programmato per oggi.</p>}
+        <div className="buttonRow"><button className="secondary" onClick={() => setWorkoutStatus('fatto')}>Fatto</button><button className="secondary" onClick={() => setWorkoutStatus('saltato')}>Saltato</button></div>
+      </div>
+    </section>
+  );
+}
+
+function FoodsTab({ foods, filteredFoods, foodSearch, setFoodSearch, manualFood, setManualFood, saveManualFood, barcode, setBarcode, importBarcode }) {
+  return (
+    <section className="grid">
+      <div className="card wide">
+        <h3>Importa prodotto da codice a barre</h3>
+        <p className="muted">Utile per alimenti confezionati. I dati arrivano da Open Food Facts: controllali sempre.</p>
+        <div className="formGrid two"><label>Codice a barre<input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="es. 800..." /></label></div>
+        <button className="primary" onClick={importBarcode}>Importa prodotto</button>
+      </div>
+      <div className="card wide">
+        <h3>Aggiungi alimento manuale</h3>
+        <div className="formGrid four">
+          <label>Nome<input value={manualFood.name} onChange={e => setManualFood({ ...manualFood, name: e.target.value })} /></label>
+          <label>Marca<input value={manualFood.brand} onChange={e => setManualFood({ ...manualFood, brand: e.target.value })} /></label>
+          <label>Categoria<input value={manualFood.category} onChange={e => setManualFood({ ...manualFood, category: e.target.value })} /></label>
+          <label>Barcode<input value={manualFood.barcode} onChange={e => setManualFood({ ...manualFood, barcode: e.target.value })} /></label>
+          <label>Kcal/100g<input type="number" value={manualFood.kcal_100g} onChange={e => setManualFood({ ...manualFood, kcal_100g: e.target.value })} /></label>
+          <label>Proteine/100g<input type="number" value={manualFood.protein_100g} onChange={e => setManualFood({ ...manualFood, protein_100g: e.target.value })} /></label>
+          <label>Carboidrati/100g<input type="number" value={manualFood.carbs_100g} onChange={e => setManualFood({ ...manualFood, carbs_100g: e.target.value })} /></label>
+          <label>Grassi/100g<input type="number" value={manualFood.fat_100g} onChange={e => setManualFood({ ...manualFood, fat_100g: e.target.value })} /></label>
+          <label>Fibre/100g<input type="number" value={manualFood.fiber_100g} onChange={e => setManualFood({ ...manualFood, fiber_100g: e.target.value })} /></label>
+          <label>Zuccheri/100g<input type="number" value={manualFood.sugar_100g} onChange={e => setManualFood({ ...manualFood, sugar_100g: e.target.value })} /></label>
+          <label>Sale/100g<input type="number" value={manualFood.salt_100g} onChange={e => setManualFood({ ...manualFood, salt_100g: e.target.value })} /></label>
+        </div>
+        <button className="primary" onClick={saveManualFood}>Salva alimento</button>
+      </div>
+      <div className="card wide">
+        <h3>Archivio alimenti</h3>
+        <label>Cerca<input value={foodSearch} onChange={e => setFoodSearch(e.target.value)} placeholder="cerca alimento" /></label>
+        <div className="foodTable">
+          <div className="foodHead"><span>Alimento</span><span>Kcal</span><span>P</span><span>C</span><span>G</span></div>
+          {filteredFoods.map(food => <div className="foodHead foodRow" key={food.id}><span>{food.name}{food.brand ? ` - ${food.brand}` : ''}</span><span>{food.kcal_100g}</span><span>{food.protein_100g}</span><span>{food.carbs_100g}</span><span>{food.fat_100g}</span></div>)}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function DietTab({ plannedOptions, plannedForm, setPlannedForm, foods, savePlannedOption, deletePlannedOption, currentWeekday }) {
+  return (
+    <section className="grid">
+      <div className="card wide">
+        <h3>Inserisci opzione dieta settimanale</h3>
+        <p className="muted">Ogni opzione può essere cliccata dalla dashboard per inserirla nel diario. Per piatti più complessi crea più opzioni o aggiungi altri alimenti come extra nel diario.</p>
+        <div className="formGrid four">
+          <label>Giorno<select value={plannedForm.weekday} onChange={e => setPlannedForm({ ...plannedForm, weekday: e.target.value })}>{weekdays.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}</select></label>
+          <label>Pasto<select value={plannedForm.meal_type} onChange={e => setPlannedForm({ ...plannedForm, meal_type: e.target.value })}>{mealTypes.filter(m => m !== 'extra').map(m => <option key={m}>{m}</option>)}</select></label>
+          <label>Nome opzione<input value={plannedForm.option_name} onChange={e => setPlannedForm({ ...plannedForm, option_name: e.target.value })} placeholder="Opzione A" /></label>
+          <label>Alimento<select value={plannedForm.food_id} onChange={e => setPlannedForm({ ...plannedForm, food_id: e.target.value })}><option value="">Seleziona</option>{foods.map(f => <option key={f.id} value={f.id}>{f.name}</option>)}</select></label>
+          <label>Grammi<input type="number" value={plannedForm.grams} onChange={e => setPlannedForm({ ...plannedForm, grams: e.target.value })} /></label>
+          <label>Note<input value={plannedForm.notes} onChange={e => setPlannedForm({ ...plannedForm, notes: e.target.value })} /></label>
+        </div>
+        <button className="primary" onClick={savePlannedOption}>Salva opzione</button>
+      </div>
+      <div className="card wide">
+        <h3>Opzioni per il giorno selezionato nella dashboard</h3>
+        <p className="muted">Giorno corrente: {weekdays.find(w => w.value === currentWeekday)?.label}</p>
+        <div className="optionList">
+          {plannedOptions.map(o => <article className="optionCard" key={o.id}><div><span className="mealBadge">{o.meal_type}</span><h4>{o.option_name}</h4><p>{(o.planned_meal_foods || []).map(f => `${f.food_name} ${f.grams} g`).join(', ')}</p></div><button className="danger" onClick={() => deletePlannedOption(o.id)}>Elimina</button></article>)}
+        </div>
+      </div>
+    </section>
+  );
+}
+
+function MeasurementsTab({ measurements, measurementForm, setMeasurementForm, saveMeasurement }) {
+  return (
+    <section className="grid">
+      <div className="card wide">
+        <h3>Registra peso e misure</h3>
+        <div className="formGrid four">
+          {['weight', 'waist', 'hips', 'chest', 'abdomen', 'arm', 'thigh', 'neck'].map(field => <label key={field}>{measurementLabel(field)}<input type="number" step="0.1" value={measurementForm[field]} onChange={e => setMeasurementForm({ ...measurementForm, [field]: e.target.value })} /></label>)}
+          <label>Note<input value={measurementForm.notes} onChange={e => setMeasurementForm({ ...measurementForm, notes: e.target.value })} /></label>
+        </div>
+        <button className="primary" onClick={saveMeasurement}>Salva misure</button>
+      </div>
+      <div className="card wide"><h3>Grafico peso</h3><LineChart data={measurements} field="weight" /></div>
+      <div className="card wide"><h3>Storico misure</h3><div className="foodTable"><div className="foodHead"><span>Data</span><span>Peso</span><span>Vita</span><span>Fianchi</span><span>Addome</span></div>{measurements.slice().reverse().map(m => <div className="foodHead foodRow" key={m.id}><span>{m.measure_date}</span><span>{m.weight || '-'}</span><span>{m.waist || '-'}</span><span>{m.hips || '-'}</span><span>{m.abdomen || '-'}</span></div>)}</div></div>
+    </section>
+  );
+}
+
+function WorkoutTab({ workouts, workoutForm, setWorkoutForm, saveWorkout, workoutLog, setWorkoutStatus }) {
+  return (
+    <section className="grid">
+      <div className="card wide">
+        <h3>Programma allenamento</h3>
+        <div className="formGrid two">
+          <label>Giorno<select value={workoutForm.weekday} onChange={e => setWorkoutForm({ ...workoutForm, weekday: e.target.value })}>{weekdays.map(d => <option key={d.value} value={d.value}>{d.label}</option>)}</select></label>
+          <label>Titolo<input value={workoutForm.title} onChange={e => setWorkoutForm({ ...workoutForm, title: e.target.value })} placeholder="Allenamento A" /></label>
+          <label className="span2">Esercizi<textarea value={workoutForm.exercises} onChange={e => setWorkoutForm({ ...workoutForm, exercises: e.target.value })} placeholder={'Squat 4x12\nPiegamenti 4x10\nCamminata 30 min'} /></label>
+          <label className="span2">Note<input value={workoutForm.notes} onChange={e => setWorkoutForm({ ...workoutForm, notes: e.target.value })} /></label>
+        </div>
+        <button className="primary" onClick={saveWorkout}>Salva allenamento</button>
+      </div>
+      <div className="card wide"><h3>Allenamenti di oggi</h3><p className="muted">Stato oggi: {workoutLog?.status || 'non registrato'}</p>{workouts.map(w => <article className="workoutBox" key={w.id}><h4>{w.title}</h4><pre>{w.exercises}</pre></article>)}<div className="buttonRow"><button className="secondary" onClick={() => setWorkoutStatus('fatto')}>Fatto</button><button className="secondary" onClick={() => setWorkoutStatus('saltato')}>Saltato</button></div></div>
+    </section>
+  );
+}
+
+function ProfileTab({ profile, setProfile, saveProfile, estimateAndSaveTarget, target }) {
+  return (
+    <section className="grid">
+      <div className="card wide">
+        <h3>Profilo dieta</h3>
+        <div className="formGrid four">
+          <label>Nome<input value={profile.name || ''} onChange={e => setProfile({ ...profile, name: e.target.value })} /></label>
+          <label>Sesso<select value={profile.sex || 'maschio'} onChange={e => setProfile({ ...profile, sex: e.target.value })}><option value="maschio">Maschio</option><option value="femmina">Femmina</option></select></label>
+          <label>Data nascita<input type="date" value={profile.birth_date || ''} onChange={e => setProfile({ ...profile, birth_date: e.target.value })} /></label>
+          <label>Altezza cm<input type="number" value={profile.height_cm || ''} onChange={e => setProfile({ ...profile, height_cm: e.target.value })} /></label>
+          <label>Attività<select value={profile.activity_level || 'sedentario'} onChange={e => setProfile({ ...profile, activity_level: e.target.value })}><option value="sedentario">Sedentario</option><option value="leggero">Leggero</option><option value="medio">Medio</option><option value="alto">Alto</option></select></label>
+          <label>Peso iniziale<input type="number" step="0.1" value={profile.start_weight || ''} onChange={e => setProfile({ ...profile, start_weight: e.target.value })} /></label>
+          <label>Peso attuale<input type="number" step="0.1" value={profile.current_weight || ''} onChange={e => setProfile({ ...profile, current_weight: e.target.value })} /></label>
+          <label>Peso obiettivo<input type="number" step="0.1" value={profile.target_weight || ''} onChange={e => setProfile({ ...profile, target_weight: e.target.value })} /></label>
+          <label>Data obiettivo<input type="date" value={profile.target_date || ''} onChange={e => setProfile({ ...profile, target_date: e.target.value })} /></label>
+          <label className="span2">Note obiettivo<input value={profile.goal_notes || ''} onChange={e => setProfile({ ...profile, goal_notes: e.target.value })} /></label>
+        </div>
+        <div className="buttonRow"><button className="primary" onClick={saveProfile}>Salva profilo</button><button className="secondary" onClick={estimateAndSaveTarget}>Calcola calorie indicative</button></div>
+        <p className="muted">Target attuale: {target.kcal_target} kcal · P {target.protein_target} g · C {target.carbs_target} g · G {target.fat_target} g. Calcolo indicativo, non sostituisce medico o nutrizionista.</p>
+      </div>
+    </section>
+  );
+}
+
+function Macro({ label, value, max, unit }) {
+  return <div className="macro"><span>{label}</span><strong>{round(value, 1)} / {round(max, 1)} {unit}</strong><Progress value={value} max={max} /></div>;
+}
+
+function Progress({ value, max }) {
+  const width = Math.min(100, Math.max(0, Number(value || 0) / Math.max(Number(max || 1), 1) * 100));
+  return <div className="progress"><div style={{ width: `${width}%` }} /></div>;
+}
+
+function LineChart({ data, field }) {
+  const points = data.filter(d => d[field] !== null && d[field] !== undefined).map((d, i) => ({ x: i, y: Number(d[field]), date: d.measure_date }));
+  if (points.length < 2) return <p className="muted">Inserisci almeno due misurazioni per vedere il grafico.</p>;
+  const min = Math.min(...points.map(p => p.y));
+  const max = Math.max(...points.map(p => p.y));
+  const width = 620;
+  const height = 220;
+  const pad = 24;
+  const range = Math.max(max - min, 1);
+  const coords = points.map((p, i) => {
+    const x = pad + (i / (points.length - 1)) * (width - pad * 2);
+    const y = height - pad - ((p.y - min) / range) * (height - pad * 2);
+    return `${x},${y}`;
+  }).join(' ');
+  return <svg className="chart" viewBox={`0 0 ${width} ${height}`} role="img"><polyline fill="none" stroke="currentColor" strokeWidth="4" points={coords} />{points.map((p, i) => { const [x, y] = coords.split(' ')[i].split(','); return <circle key={p.date} cx={x} cy={y} r="5" fill="currentColor" />; })}<text x="24" y="24">{max} kg</text><text x="24" y="210">{min} kg</text></svg>;
+}
+
+function labelForTab(tab) {
+  return { dieta: 'Dieta settimanale', alimenti: 'Archivio alimenti', misure: 'Peso e misure', allenamento: 'Allenamento', profilo: 'Profilo' }[tab] || tab;
+}
+
+function statusLabel(status) {
+  return { completata: 'Completata', parziale: 'Parziale', sgarro: 'Sgarro', saltata: 'Saltata', non_registrata: 'Non registrata' }[status] || status;
+}
+
+function measurementLabel(field) {
+  return { weight: 'Peso kg', waist: 'Vita cm', hips: 'Fianchi cm', chest: 'Petto cm', abdomen: 'Addome cm', arm: 'Braccio cm', thigh: 'Coscia cm', neck: 'Collo cm' }[field] || field;
+}
+
+function nullableNumber(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  return Number(value);
+}
