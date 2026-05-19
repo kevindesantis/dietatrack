@@ -229,3 +229,57 @@ button.small {
 @media (max-width: 880px) {
   .foodHeadSix { grid-template-columns: 1fr; }
 }
+
+.autocompleteWrap {
+  position: relative;
+  z-index: 5;
+}
+
+.autocompleteMenu {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% - 4px);
+  max-height: 320px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 18px 45px rgba(20, 40, 33, 0.18);
+  padding: 8px;
+  z-index: 30;
+}
+
+.autocompleteItem {
+  width: 100%;
+  border: 0;
+  border-radius: 14px;
+  padding: 10px 12px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  cursor: pointer;
+}
+
+.autocompleteItem:hover,
+.autocompleteItem.selected {
+  background: #eef7f2;
+}
+
+.autocompleteItem small,
+.autocompleteEmpty,
+.selectedFoodPill {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.autocompleteEmpty {
+  padding: 12px;
+}
+
+.selectedFoodPill {
+  margin: 6px 0 0;
+}

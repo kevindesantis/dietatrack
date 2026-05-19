@@ -108,11 +108,7 @@ export default function Home() {
   const totals = useMemo(() => sumLogs(logs), [logs]);
   const remain = useMemo(() => remaining(target, totals), [target, totals]);
   const currentWeekday = useMemo(() => new Date(`${selectedDate}T12:00:00`).getDay(), [selectedDate]);
-  const filteredFoods = useMemo(() => {
-    const q = foodSearch.trim().toLowerCase();
-    if (!q) return foods.slice(0, 40);
-    return foods.filter(food => `${food.name} ${food.brand || ''} ${food.category || ''} ${food.barcode || ''}`.toLowerCase().includes(q)).slice(0, 60);
-  }, [foods, foodSearch]);
+  const filteredFoods = useMemo(() => filterFoodsForSearch(foods, foodSearch, 35), [foods, foodSearch]);
   const dailySuggestions = useMemo(() => buildDailySuggestions(foods, target, totals, profile), [foods, target, totals, profile]);
 
   useEffect(() => {
@@ -637,7 +633,7 @@ export default function Home() {
     const g = quantityMode === 'servings' ? defaultServing * qty : Number(grams || 0);
     if (g <= 0) return setMessage(quantityMode === 'servings' ? 'Questo alimento non ha una porzione predefinita valida. Usa i grammi oppure impostala nella scheda Alimenti.' : 'Inserisci i grammi.');
     const calc = calculateNutrition(food, g);
-    const portionNote = quantityMode === 'servings' ? `${qty} × ${food.serving_label || 'porzione'} ≈ ${round(g, 0)} g` : null;
+    const portionNote = quantityMode === 'servings' ? `Porzione: ${round(qty, 2)} × ${food.serving_label || 'porzione'}` : null;
     const payload = {
       user_id: activeUserId,
       food_id: food.id,
@@ -1097,20 +1093,26 @@ function Dashboard(props) {
         <h3>Aggiungi quello che hai mangiato</h3>
         <div className="formGrid four">
           <label>Pasto<select value={mealType} onChange={e => setMealType(e.target.value)}>{mealTypes.map(m => <option key={m}>{m}</option>)}</select></label>
-          <label>Cerca alimento<input value={foodSearch} onChange={e => setFoodSearch(e.target.value)} placeholder="pasta, pollo, banana..." /></label>
-          <label>Alimento<select value={selectedFoodId} onChange={e => setSelectedFoodId(e.target.value)}><option value="">Seleziona</option>{filteredFoods.map(food => <option key={food.id} value={food.id}>{food.name}{food.brand ? ` - ${food.brand}` : ''}</option>)}</select></label>
-          <label>Quantità<select value={quantityMode} onChange={e => setQuantityMode(e.target.value)}><option value="grams">So i grammi</option><option value="servings">Non so il peso: uso pezzi/porzioni</option></select></label>
+          <FoodAutocomplete
+            foods={filteredFoods}
+            search={foodSearch}
+            setSearch={setFoodSearch}
+            selectedFoodId={selectedFoodId}
+            setSelectedFoodId={setSelectedFoodId}
+            placeholder="scrivi carbonara, spinacina, nippon, caffè..."
+          />
+          <label>Quantità<select value={quantityMode} onChange={e => setQuantityMode(e.target.value)}><option value="grams">So i grammi</option><option value="servings">Uso pezzi/porzioni</option></select></label>
           {quantityMode === 'grams' ? (
             <label>Grammi<input type="number" min="1" value={grams} onChange={e => setGrams(e.target.value)} /></label>
           ) : (
-            <label>N. pezzi/porzioni<input type="number" min="0.25" step="0.25" value={servingQty} onChange={e => setServingQty(e.target.value)} /></label>
+            <label>{selectedFood?.serving_label ? `Quanti ${servingUnitName(selectedFood.serving_label)}?` : 'Quante porzioni?'}<input type="number" min="0.25" step="0.25" value={servingQty} onChange={e => setServingQty(e.target.value)} /></label>
           )}
         </div>
         {selectedFood && (
           <div className="portionPanel">
             <strong>{selectedFood.name}{selectedFood.brand ? ` - ${selectedFood.brand}` : ''}</strong>
             {selectedFood.default_serving_g ? (
-              <p>Porzione rapida: <b>{selectedFood.serving_label || '1 porzione'}</b> ≈ {round(selectedFood.default_serving_g, 0)} g. {selectedFood.serving_note || ''}</p>
+              <p>Porzione rapida: <b>{selectedFood.serving_label || '1 porzione'}</b>. {selectedFood.serving_note || 'L’app usa il peso medio solo per calcolare le calorie, ma tu inserisci semplicemente quante porzioni hai mangiato.'}</p>
             ) : (
               <p>Questo alimento non ha ancora una porzione rapida: puoi usarlo in grammi oppure impostare una porzione nella scheda Alimenti.</p>
             )}
@@ -1168,7 +1170,7 @@ function Dashboard(props) {
               {mealLogs.map(log => (
                 <div className="logRow" key={log.id}>
                   <span>{log.food_name}</span>
-                  <small>{round(log.grams, 0)} g · {round(log.kcal, 0)} kcal · P {log.protein} · C {log.carbs} · G {log.fat}{log.notes ? ` · ${log.notes}` : ''}</small>
+                  <small>{formatLogQuantity(log)} · {round(log.kcal, 0)} kcal · P {log.protein} · C {log.carbs} · G {log.fat}{log.notes && !String(log.notes).startsWith('Porzione:') ? ` · ${log.notes}` : ''}</small>
                   <button className="danger" onClick={() => deleteLog(log.id)}>Elimina</button>
                 </div>
               ))}
@@ -1206,6 +1208,46 @@ function Dashboard(props) {
         <div className="buttonRow"><button className="secondary" onClick={() => setWorkoutStatus('fatto')}>Fatto</button><button className="secondary" onClick={() => setWorkoutStatus('saltato')}>Saltato</button></div>
       </div>
     </section>
+  );
+}
+
+
+function FoodAutocomplete({ foods, search, setSearch, selectedFoodId, setSelectedFoodId, placeholder = 'cerca alimento' }) {
+  const [open, setOpen] = useState(false);
+  const selected = (foods || []).find(food => food.id === selectedFoodId);
+  const showList = open && search.trim().length > 0;
+
+  function chooseFood(food) {
+    setSelectedFoodId(food.id);
+    setSearch(formatFoodName(food));
+    setOpen(false);
+  }
+
+  return (
+    <div className="autocompleteWrap span2">
+      <label>Cerca e scegli alimento
+        <input
+          value={search}
+          onFocus={() => setOpen(true)}
+          onChange={e => { setSearch(e.target.value); setSelectedFoodId(''); setOpen(true); }}
+          placeholder={placeholder}
+          autoComplete="off"
+        />
+      </label>
+      {showList && (
+        <div className="autocompleteMenu">
+          {(foods || []).length > 0 ? foods.map(food => (
+            <button type="button" key={food.id} className={`autocompleteItem ${food.id === selectedFoodId ? 'selected' : ''}`} onMouseDown={e => { e.preventDefault(); chooseFood(food); }}>
+              <strong>{formatFoodName(food)}</strong>
+              <small>{food.default_serving_g ? `${food.serving_label || '1 porzione'} · ` : ''}{round(food.kcal_100g, 0)} kcal/100g · P {round(food.protein_100g, 1)} · C {round(food.carbs_100g, 1)} · G {round(food.fat_100g, 1)}</small>
+            </button>
+          )) : (
+            <div className="autocompleteEmpty">Non lo trovo nell’archivio locale. Vai in Alimenti → Cerca prodotto online oppure aggiungilo manualmente.</div>
+          )}
+        </div>
+      )}
+      {selected && <p className="selectedFoodPill">Selezionato: <b>{formatFoodName(selected)}</b></p>}
+    </div>
   );
 }
 
@@ -1495,6 +1537,63 @@ function LineChart({ data, field }) {
 }
 
 
+
+
+function normalizeSearch(value) {
+  return String(value || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function formatFoodName(food) {
+  return `${food?.name || ''}${food?.brand ? ` - ${food.brand}` : ''}`.trim();
+}
+
+function filterFoodsForSearch(foods, query, limit = 35) {
+  const q = normalizeSearch(query);
+  const list = foods || [];
+  if (!q) return list.slice(0, limit);
+  const words = q.split(/\s+/).filter(Boolean);
+  return list
+    .map(food => {
+      const name = normalizeSearch(food.name);
+      const brand = normalizeSearch(food.brand);
+      const category = normalizeSearch(food.category);
+      const barcode = normalizeSearch(food.barcode);
+      const allergens = Array.isArray(food.allergens) ? normalizeSearch(food.allergens.join(' ')) : '';
+      const tags = Array.isArray(food.tags) ? normalizeSearch(food.tags.join(' ')) : '';
+      const haystack = `${name} ${brand} ${category} ${barcode} ${allergens} ${tags}`;
+      if (!words.every(word => haystack.includes(word))) return null;
+      let score = 0;
+      if (name === q) score += 120;
+      if (name.startsWith(q)) score += 80;
+      if (brand && brand.includes(q)) score += 35;
+      if (tags.includes(q)) score += 25;
+      if (category.includes(q)) score += 10;
+      score += Math.max(0, 60 - name.length / 2);
+      if (food.default_serving_g) score += 8;
+      return { food, score };
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.score - a.score || String(a.food.name).localeCompare(String(b.food.name)))
+    .slice(0, limit)
+    .map(item => item.food);
+}
+
+function servingUnitName(label) {
+  return String(label || 'porzioni')
+    .replace(/^\s*1\s+/i, '')
+    .replace(/^una?\s+/i, '')
+    .trim() || 'porzioni';
+}
+
+function formatLogQuantity(log) {
+  if (log?.notes && String(log.notes).startsWith('Porzione:')) return String(log.notes).replace('Porzione:', '').trim();
+  return `${round(log?.grams || 0, 0)} g`;
+}
 
 function parseServingSize(value) {
   if (!value) return null;
