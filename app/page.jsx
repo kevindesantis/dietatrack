@@ -208,12 +208,72 @@ export default function Home() {
     setWorkoutLog(data);
   }
 
+  function getRedirectUrl() {
+    if (typeof window === 'undefined') return undefined;
+    return window.location.origin;
+  }
+
+  function formatAuthError(error) {
+    if (!error?.message) return '';
+    const msg = error.message.toLowerCase();
+    if (msg.includes('email not confirmed')) {
+      return 'Email non confermata. Controlla la mail di conferma oppure, per i test, disattiva Confirm email in Supabase > Authentication > Providers > Email.';
+    }
+    if (msg.includes('invalid login credentials')) {
+      return 'Email o password non corretti. Se ti sei appena registrato e non hai confermato la mail, prima devi cliccare il link ricevuto.';
+    }
+    if (msg.includes('email address not authorized')) {
+      return 'Supabase non può inviare email a questo indirizzo con il servizio email predefinito. Per i test usa una mail del team Supabase, disattiva Confirm email oppure configura un SMTP personalizzato.';
+    }
+    return error.message;
+  }
+
   async function handleAuth(event) {
     event.preventDefault();
     setMessage('');
-    const fn = authMode === 'login' ? supabase.auth.signInWithPassword : supabase.auth.signUp;
-    const { error } = await fn({ email, password });
-    setMessage(error ? error.message : authMode === 'login' ? 'Accesso effettuato.' : 'Registrazione completata. Controlla la mail se Supabase richiede conferma.');
+
+    if (authMode === 'login') {
+      const { error } = await supabase.auth.signInWithPassword({ email, password });
+      setMessage(error ? formatAuthError(error) : 'Accesso effettuato.');
+      return;
+    }
+
+    const { data, error } = await supabase.auth.signUp({
+      email,
+      password,
+      options: {
+        emailRedirectTo: getRedirectUrl(),
+      },
+    });
+
+    if (error) {
+      setMessage(formatAuthError(error));
+      return;
+    }
+
+    if (data?.session) {
+      setMessage('Registrazione completata. Sei già dentro.');
+    } else {
+      setMessage('Registrazione creata. Se Supabase ha Confirm email attivo, devi cliccare il link ricevuto via email prima di entrare. Se non arriva, controlla spam oppure disattiva Confirm email per i test.');
+    }
+  }
+
+  async function resendConfirmation() {
+    setMessage('');
+    if (!email) {
+      setMessage('Inserisci prima la tua email nel campo sopra.');
+      return;
+    }
+
+    const { error } = await supabase.auth.resend({
+      type: 'signup',
+      email,
+      options: {
+        emailRedirectTo: getRedirectUrl(),
+      },
+    });
+
+    setMessage(error ? formatAuthError(error) : 'Email di conferma reinviata. Controlla anche la cartella spam.');
   }
 
   async function signOut() {
@@ -602,6 +662,11 @@ export default function Home() {
           <button className="linkBtn" onClick={() => setAuthMode(authMode === 'login' ? 'signup' : 'login')}>
             {authMode === 'login' ? 'Non hai un account? Registrati' : 'Hai già un account? Accedi'}
           </button>
+          {authMode === 'login' && (
+            <button className="linkBtn smallLink" onClick={resendConfirmation} type="button">
+              Non ti è arrivata la mail? Reinvia conferma
+            </button>
+          )}
           {message && <p className="notice">{message}</p>}
         </section>
       </main>
