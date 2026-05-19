@@ -119,3 +119,23 @@ Se dopo la registrazione non arriva nessuna email e non riesci ad accedere, cont
 3. Per uso reale: configura un SMTP personalizzato in `Authentication > SMTP Settings`, altrimenti il servizio email predefinito di Supabase è molto limitato.
 
 Il codice usa già `emailRedirectTo: window.location.origin`, quindi il link di conferma torna al dominio dove è pubblicata la web app.
+
+## Modalità admin / supervisore
+
+Questa versione include una scheda **Admin**. L'utente admin può selezionare qualsiasi profilo registrato e poi usare le sezioni **Oggi**, **Dieta**, **Misure**, **Allenamento** e **Profilo** per vedere o modificare i dati di quell'utente.
+
+Per impostazione predefinita l'admin è:
+
+```text
+kevindavide31@gmail.com
+```
+
+Per aggiungere altri admin, vai su Supabase → SQL Editor ed esegui:
+
+```sql
+insert into public.app_admins (email, active)
+values ('email-admin@example.com', true)
+on conflict (email) do update set active = true;
+```
+
+Dopo aver caricato questa versione devi eseguire di nuovo `supabase/database.sql` nel SQL Editor. Gli utenti normali continuano a vedere solo i propri dati grazie alle policy RLS; solo gli admin presenti in `app_admins` possono vedere e modificare gli altri utenti.
