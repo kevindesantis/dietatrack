@@ -139,3 +139,53 @@ on conflict (email) do update set active = true;
 ```
 
 Dopo aver caricato questa versione devi eseguire di nuovo `supabase/database.sql` nel SQL Editor. Gli utenti normali continuano a vedere solo i propri dati grazie alle policy RLS; solo gli admin presenti in `app_admins` possono vedere e modificare gli altri utenti.
+
+## Aggiornamento archivio alimenti ampliato
+
+Questa versione include un archivio pubblico molto più grande rispetto alla prima prova. Sono stati aggiunti piatti comuni italiani e alimenti pronti come pasta al sugo, pasta alla carbonara, cotolette, spinacine, bastoncini di pesce, Nippon, pizza, panini, latticini, salumi, frutta, verdura, snack e bevande.
+
+I valori sono salvati sempre per 100 g/ml. Per i prodotti confezionati controllare sempre l'etichetta: marca, ricetta e formato possono cambiare. Se un prodotto non è presente, dalla scheda **Alimenti** puoi cercarlo online su Open Food Facts per nome o codice a barre e importarlo nel tuo archivio personale.
+
+Quando esegui `supabase/database.sql`, la versione 3 del seed elimina il vecchio archivio pubblico base e reinserisce quello nuovo senza duplicati. Gli alimenti già registrati nel diario restano salvati con nome e valori del momento in cui li hai inseriti.
+
+## Generatore allenamento personalizzato
+
+Questa versione integra anche la creazione dell'allenamento. Nel profilo o nella scheda **Allenamento** puoi scegliere:
+
+- obiettivo: dimagrimento, tonificazione, massa, resistenza oppure salute/mobilità;
+- livello: principiante, intermedio, avanzato;
+- giorni a settimana: da 1 a 6;
+- luogo: al chiuso, all'aperto o entrambi;
+- attrezzatura: senza attrezzi, attrezzi semplici, palestra/professionali o misto;
+- durata indicativa della seduta;
+- note personali/limiti, per esempio no corsa, preferisco camminata, fastidio al ginocchio.
+
+Premendo **Genera allenamento**, l'app cancella solo le vecchie schede generate automaticamente e crea una nuova settimana di allenamenti. Gli allenamenti manuali restano salvati. Ogni seduta include riscaldamento, esercizi, recuperi, cardio/mobilità quando utile e defaticamento. Gli utenti possono segnare l'allenamento del giorno come fatto, saltato o fatto modificato.
+
+La scheda è prudente e modificabile: non sostituisce un personal trainer o un medico, soprattutto in caso di patologie, dolori articolari, problemi cardiaci/respiratori o inattività prolungata.
+
+## Aggiornamento: porzioni rapide e alimenti pratici
+
+Questa versione aggiunge l'inserimento senza conoscere i grammi esatti:
+
+- modalità “So i grammi”;
+- modalità “Non so il peso: uso pezzi/porzioni”;
+- porzioni rapide per Nippon, cotolette, spinacine, bastoncini, caffè, cappuccino, acqua, pasta al piatto;
+- varianti fritte/forno per evitare sottostime caloriche;
+- colonna `default_serving_g`, `serving_label`, `serving_note` nella tabella `foods`;
+- nuovi alimenti pratici come caffè amaro, cappuccino senza zucchero, cotoletta fritta, spinacina generica fritta, bastoncini di spinaci, olio assorbito in frittura.
+
+Dopo aver caricato il progetto su GitHub/Vercel, esegui di nuovo `supabase/database.sql` in Supabase SQL Editor.
+
+## Aggiornamento: ricerca alimenti autocomplete e archivio esteso
+
+Questa versione migliora la ricerca degli alimenti nella Dashboard:
+
+- scrivi nella barra e si apre un menu a tendina;
+- clicchi direttamente l'alimento dal menu, senza doverlo riscrivere o selezionarlo sotto;
+- la ricerca usa anche marca, categoria, allergeni e tag, quindi trova meglio parole come “carbonara”, “spinacina”, “bastoncini”, “Nippon”, “caffè”, “fritta”, “forno”;
+- quando usi la modalità porzioni, il diario mostra “5 × 1 quadratino/snack piccolo” invece dei grammi;
+- i grammi restano usati solo internamente per calcolare calorie e macro;
+- l'archivio base pubblico è stato ampliato a oltre 400 alimenti/piatti/porzioni pratiche.
+
+Se un alimento manca ancora, usa **Alimenti → Cerca prodotto online per nome** oppure **codice a barre**. Per non rischiare blocchi API, la ricerca online non parte a ogni lettera digitata: scrivi il nome e premi il pulsante.
