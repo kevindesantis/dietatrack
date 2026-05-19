@@ -3,12 +3,18 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import {
+  buildGeneratedDietWeek,
   calculateNutrition,
+  estimatePersonalizedPlan,
   estimateTargets,
   mealTypes,
   remaining,
+  restrictionGroups,
+  restrictionMatchesForFood,
+  restrictionSummary,
   round,
   sumLogs,
+  targetDatesForPlan,
   todayISO,
   weekdays
 } from '../lib/nutrition';
@@ -23,7 +29,13 @@ const emptyProfile = {
   current_weight: '',
   target_weight: '',
   target_date: '',
-  goal_notes: ''
+  goal_notes: '',
+  food_preferences: '',
+  excluded_foods: '',
+  selected_restrictions: [],
+  custom_allergies: '',
+  allergy_notes: '',
+  diet_style: 'equilibrata'
 };
 
 const emptyTarget = {
@@ -58,7 +70,7 @@ export default function Home() {
   const [workoutLog, setWorkoutLog] = useState(null);
 
   const [manualFood, setManualFood] = useState({
-    name: '', brand: '', category: '', barcode: '', kcal_100g: '', protein_100g: '', carbs_100g: '', fat_100g: '', fiber_100g: '', sugar_100g: '', salt_100g: ''
+    name: '', brand: '', category: '', barcode: '', allergens: '', tags: '', kcal_100g: '', protein_100g: '', carbs_100g: '', fat_100g: '', fiber_100g: '', sugar_100g: '', salt_100g: ''
   });
   const [barcode, setBarcode] = useState('');
   const [measurementForm, setMeasurementForm] = useState({ weight: '', waist: '', hips: '', chest: '', abdomen: '', arm: '', thigh: '', neck: '', notes: '' });
@@ -208,16 +220,30 @@ export default function Home() {
     await supabase.auth.signOut();
   }
 
-  async function saveProfile() {
-    const { error } = await supabase.from('profiles').upsert({
+  async function persistProfile() {
+    const payload = {
       user_id: user.id,
       ...profile,
+      birth_date: nullableDate(profile.birth_date),
+      target_date: nullableDate(profile.target_date),
       height_cm: nullableNumber(profile.height_cm),
       start_weight: nullableNumber(profile.start_weight),
       current_weight: nullableNumber(profile.current_weight),
       target_weight: nullableNumber(profile.target_weight),
+      food_preferences: profile.food_preferences || null,
+      excluded_foods: profile.excluded_foods || null,
+      selected_restrictions: Array.isArray(profile.selected_restrictions) ? profile.selected_restrictions : csvToArray(profile.selected_restrictions),
+      custom_allergies: profile.custom_allergies || null,
+      allergy_notes: profile.allergy_notes || null,
+      diet_style: profile.diet_style || 'equilibrata',
       updated_at: new Date().toISOString()
-    }, { onConflict: 'user_id' });
+    };
+    const { error } = await supabase.from('profiles').upsert(payload, { onConflict: 'user_id' });
+    return { error, payload };
+  }
+
+  async function saveProfile() {
+    const { error } = await persistProfile();
     setMessage(error ? error.message : 'Profilo salvato.');
   }
 
@@ -245,6 +271,113 @@ export default function Home() {
     setMessage(`Obiettivo stimato salvato. BMR ${estimated.bmr} kcal, mantenimento circa ${estimated.tdee} kcal. Valori indicativi.`);
   }
 
+  async function generatePersonalizedDiet() {
+    setLoading(true);
+    setMessage('');
+
+    const plan = estimatePersonalizedPlan(profile, selectedDate);
+    if (!plan.valid) {
+      setLoading(false);
+      setMessage(plan.message);
+      return;
+    }
+
+    const week = buildGeneratedDietWeek(foods, plan, profile);
+    if (!week.options.length) {
+      setLoading(false);
+      setMessage('Non riesco a generare la dieta: mancano alimenti base nel database o hai escluso troppi alimenti. Vai nella sezione Alimenti e aggiungi gli alimenti principali.');
+      return;
+    }
+
+    const { error: profileError } = await persistProfile();
+    if (profileError) {
+      setLoading(false);
+      setMessage(profileError.message);
+      return;
+    }
+
+    const generationId = crypto.randomUUID();
+
+    await supabase.from('diet_generations').insert({
+      id: generationId,
+      user_id: user.id,
+      title: `Dieta ${plan.goal_type} - ${selectedDate}`,
+      goal_type: plan.goal_type,
+      realistic: plan.realistic,
+      kcal_target: plan.kcal_target,
+      protein_target: plan.protein_target,
+      carbs_target: plan.carbs_target,
+      fat_target: plan.fat_target,
+      bmr: plan.bmr,
+      tdee: plan.tdee,
+      daily_deficit: plan.daily_deficit,
+      planned_rate_kg_week: plan.planned_rate_kg_week,
+      notes: plan.message
+    });
+
+    await supabase
+      .from('planned_meal_options')
+      .delete()
+      .eq('user_id', user.id)
+      .eq('source', 'generated');
+
+    for (const option of week.options) {
+      const { data: insertedOption, error } = await supabase.from('planned_meal_options').insert({
+        user_id: user.id,
+        generation_id: generationId,
+        source: 'generated',
+        weekday: option.weekday,
+        meal_type: option.meal_type,
+        option_name: option.option_name,
+        notes: option.notes
+      }).select().single();
+
+      if (error) {
+        setLoading(false);
+        setMessage(error.message);
+        return;
+      }
+
+      const rows = option.items.map(item => ({
+        user_id: user.id,
+        option_id: insertedOption.id,
+        food_id: item.food_id,
+        food_name: item.food_name,
+        grams: item.grams,
+        kcal: item.kcal,
+        protein: item.protein,
+        carbs: item.carbs,
+        fat: item.fat,
+        fiber: item.fiber || 0,
+        sugar: item.sugar || 0,
+        salt: item.salt || 0
+      }));
+
+      const { error: itemError } = await supabase.from('planned_meal_foods').insert(rows);
+      if (itemError) {
+        setLoading(false);
+        setMessage(itemError.message);
+        return;
+      }
+    }
+
+    const targetRows = targetDatesForPlan(plan, selectedDate).map(date => ({
+      user_id: user.id,
+      target_date: date,
+      kcal_target: plan.kcal_target,
+      protein_target: plan.protein_target,
+      carbs_target: plan.carbs_target,
+      fat_target: plan.fat_target
+    }));
+
+    await supabase.from('daily_targets').upsert(targetRows, { onConflict: 'user_id,target_date' });
+
+    await Promise.all([loadTarget(), loadPlannedOptions()]);
+    setLoading(false);
+    setTab('dieta');
+    setMessage(`${plan.message} Ho creato una dieta settimanale automatica con ${week.options.length} opzioni e obiettivi giornalieri già salvati. ${week.warnings.length ? week.warnings[0] : ''}`);
+  }
+
   async function saveManualFood() {
     if (!manualFood.name.trim()) return setMessage('Inserisci il nome alimento.');
     const payload = {
@@ -253,6 +386,8 @@ export default function Home() {
       brand: manualFood.brand || null,
       category: manualFood.category || null,
       barcode: manualFood.barcode || null,
+      allergens: csvToArray(manualFood.allergens),
+      tags: csvToArray(manualFood.tags),
       kcal_100g: Number(manualFood.kcal_100g || 0),
       protein_100g: Number(manualFood.protein_100g || 0),
       carbs_100g: Number(manualFood.carbs_100g || 0),
@@ -265,7 +400,7 @@ export default function Home() {
     };
     const { error } = await supabase.from('foods').insert(payload);
     if (error) return setMessage(error.message);
-    setManualFood({ name: '', brand: '', category: '', barcode: '', kcal_100g: '', protein_100g: '', carbs_100g: '', fat_100g: '', fiber_100g: '', sugar_100g: '', salt_100g: '' });
+    setManualFood({ name: '', brand: '', category: '', barcode: '', allergens: '', tags: '', kcal_100g: '', protein_100g: '', carbs_100g: '', fat_100g: '', fiber_100g: '', sugar_100g: '', salt_100g: '' });
     await loadFoods();
     setMessage('Alimento salvato.');
   }
@@ -291,6 +426,8 @@ export default function Home() {
         fiber_100g: Number(n.fiber_100g || 0),
         sugar_100g: Number(n.sugars_100g || 0),
         salt_100g: Number(n.salt_100g || 0),
+        allergens: (p.allergens_tags || []).map(tag => tag.replace(/^en:/, '').replace(/-/g, ' ')),
+        tags: [...(p.labels_tags || []), ...(p.categories_tags || [])].map(tag => tag.replace(/^en:/, '').replace(/-/g, ' ')).slice(0, 20),
         source: 'openfoodfacts',
         is_public: false
       };
@@ -307,6 +444,8 @@ export default function Home() {
   async function addFoodLog() {
     const food = foods.find(item => item.id === selectedFoodId);
     if (!food) return setMessage('Seleziona un alimento.');
+    const blocked = restrictionMatchesForFood(food, profile);
+    if (blocked.length) return setMessage(`Attenzione: ${food.name} corrisponde a restrizioni/allergie impostate: ${blocked.join(', ')}. Modifica il profilo se vuoi consentirlo.`);
     const g = Number(grams || 0);
     if (g <= 0) return setMessage('Inserisci i grammi.');
     const calc = calculateNutrition(food, g);
@@ -364,6 +503,8 @@ export default function Home() {
   async function savePlannedOption() {
     const food = foods.find(item => item.id === plannedForm.food_id);
     if (!food) return setMessage('Seleziona un alimento per la dieta programmata.');
+    const blocked = restrictionMatchesForFood(food, profile);
+    if (blocked.length) return setMessage(`Questo alimento è escluso dal profilo: ${blocked.join(', ')}. Cambia alimento o modifica le restrizioni.`);
     const g = Number(plannedForm.grams || 0);
     const calc = calculateNutrition(food, g);
     const { data: option, error } = await supabase.from('planned_meal_options').insert({
@@ -572,6 +713,8 @@ export default function Home() {
           setProfile={setProfile}
           saveProfile={saveProfile}
           estimateAndSaveTarget={estimateAndSaveTarget}
+          generatePersonalizedDiet={generatePersonalizedDiet}
+          selectedDate={selectedDate}
           target={target}
         />
       )}
@@ -625,7 +768,7 @@ function Dashboard(props) {
           {plannedOptions.map(option => (
             <article className="optionCard" key={option.id}>
               <div>
-                <span className="mealBadge">{option.meal_type}</span>
+                <span className="mealBadge">{option.meal_type}{option.source === 'generated' ? ' · generata' : ''}</span>
                 <h4>{option.option_name}</h4>
                 <p>{(option.planned_meal_foods || []).map(f => `${f.food_name} ${f.grams} g`).join(', ')}</p>
               </div>
@@ -703,6 +846,8 @@ function FoodsTab({ foods, filteredFoods, foodSearch, setFoodSearch, manualFood,
           <label>Marca<input value={manualFood.brand} onChange={e => setManualFood({ ...manualFood, brand: e.target.value })} /></label>
           <label>Categoria<input value={manualFood.category} onChange={e => setManualFood({ ...manualFood, category: e.target.value })} /></label>
           <label>Barcode<input value={manualFood.barcode} onChange={e => setManualFood({ ...manualFood, barcode: e.target.value })} /></label>
+          <label>Allergeni/tag<input value={manualFood.allergens} onChange={e => setManualFood({ ...manualFood, allergens: e.target.value })} placeholder="es. glutine, lattosio" /></label>
+          <label>Parametri<input value={manualFood.tags} onChange={e => setManualFood({ ...manualFood, tags: e.target.value })} placeholder="es. vegano, senza glutine" /></label>
           <label>Kcal/100g<input type="number" value={manualFood.kcal_100g} onChange={e => setManualFood({ ...manualFood, kcal_100g: e.target.value })} /></label>
           <label>Proteine/100g<input type="number" value={manualFood.protein_100g} onChange={e => setManualFood({ ...manualFood, protein_100g: e.target.value })} /></label>
           <label>Carboidrati/100g<input type="number" value={manualFood.carbs_100g} onChange={e => setManualFood({ ...manualFood, carbs_100g: e.target.value })} /></label>
@@ -718,7 +863,7 @@ function FoodsTab({ foods, filteredFoods, foodSearch, setFoodSearch, manualFood,
         <label>Cerca<input value={foodSearch} onChange={e => setFoodSearch(e.target.value)} placeholder="cerca alimento" /></label>
         <div className="foodTable">
           <div className="foodHead"><span>Alimento</span><span>Kcal</span><span>P</span><span>C</span><span>G</span></div>
-          {filteredFoods.map(food => <div className="foodHead foodRow" key={food.id}><span>{food.name}{food.brand ? ` - ${food.brand}` : ''}</span><span>{food.kcal_100g}</span><span>{food.protein_100g}</span><span>{food.carbs_100g}</span><span>{food.fat_100g}</span></div>)}
+          {filteredFoods.map(food => <div className="foodHead foodRow" key={food.id}><span>{food.name}{food.brand ? ` - ${food.brand}` : ''}{Array.isArray(food.allergens) && food.allergens.length ? <small className="muted"> · {food.allergens.join(', ')}</small> : null}</span><span>{food.kcal_100g}</span><span>{food.protein_100g}</span><span>{food.carbs_100g}</span><span>{food.fat_100g}</span></div>)}
         </div>
       </div>
     </section>
@@ -745,7 +890,7 @@ function DietTab({ plannedOptions, plannedForm, setPlannedForm, foods, savePlann
         <h3>Opzioni per il giorno selezionato nella dashboard</h3>
         <p className="muted">Giorno corrente: {weekdays.find(w => w.value === currentWeekday)?.label}</p>
         <div className="optionList">
-          {plannedOptions.map(o => <article className="optionCard" key={o.id}><div><span className="mealBadge">{o.meal_type}</span><h4>{o.option_name}</h4><p>{(o.planned_meal_foods || []).map(f => `${f.food_name} ${f.grams} g`).join(', ')}</p></div><button className="danger" onClick={() => deletePlannedOption(o.id)}>Elimina</button></article>)}
+          {plannedOptions.map(o => <article className="optionCard" key={o.id}><div><span className="mealBadge">{o.meal_type}{o.source === 'generated' ? ' · generata' : ''}</span><h4>{o.option_name}</h4><p>{(o.planned_meal_foods || []).map(f => `${f.food_name} ${f.grams} g`).join(', ')}</p></div><button className="danger" onClick={() => deletePlannedOption(o.id)}>Elimina</button></article>)}
         </div>
       </div>
     </section>
@@ -787,25 +932,84 @@ function WorkoutTab({ workouts, workoutForm, setWorkoutForm, saveWorkout, workou
   );
 }
 
-function ProfileTab({ profile, setProfile, saveProfile, estimateAndSaveTarget, target }) {
+function ProfileTab({ profile, setProfile, saveProfile, estimateAndSaveTarget, generatePersonalizedDiet, selectedDate, target }) {
+  const preview = estimatePersonalizedPlan(profile, selectedDate);
+  const activeRestrictions = restrictionSummary(profile);
+
+  function toggleRestriction(key) {
+    const current = Array.isArray(profile.selected_restrictions) ? profile.selected_restrictions : csvToArray(profile.selected_restrictions);
+    const next = current.includes(key) ? current.filter(item => item !== key) : [...current, key];
+    setProfile({ ...profile, selected_restrictions: next });
+  }
+
   return (
     <section className="grid">
       <div className="card wide">
         <h3>Profilo dieta</h3>
+        <p className="muted">Compila questi dati per usare l'app in due modi: inserire la tua dieta manuale oppure generare una proposta automatica modificabile.</p>
         <div className="formGrid four">
           <label>Nome<input value={profile.name || ''} onChange={e => setProfile({ ...profile, name: e.target.value })} /></label>
           <label>Sesso<select value={profile.sex || 'maschio'} onChange={e => setProfile({ ...profile, sex: e.target.value })}><option value="maschio">Maschio</option><option value="femmina">Femmina</option></select></label>
           <label>Data nascita<input type="date" value={profile.birth_date || ''} onChange={e => setProfile({ ...profile, birth_date: e.target.value })} /></label>
           <label>Altezza cm<input type="number" value={profile.height_cm || ''} onChange={e => setProfile({ ...profile, height_cm: e.target.value })} /></label>
           <label>Attività<select value={profile.activity_level || 'sedentario'} onChange={e => setProfile({ ...profile, activity_level: e.target.value })}><option value="sedentario">Sedentario</option><option value="leggero">Leggero</option><option value="medio">Medio</option><option value="alto">Alto</option></select></label>
+          <label>Stile dieta<select value={profile.diet_style || 'equilibrata'} onChange={e => setProfile({ ...profile, diet_style: e.target.value })}><option value="equilibrata">Equilibrata</option><option value="alta_proteica">Più proteica</option><option value="mediterranea">Mediterranea semplice</option></select></label>
           <label>Peso iniziale<input type="number" step="0.1" value={profile.start_weight || ''} onChange={e => setProfile({ ...profile, start_weight: e.target.value })} /></label>
           <label>Peso attuale<input type="number" step="0.1" value={profile.current_weight || ''} onChange={e => setProfile({ ...profile, current_weight: e.target.value })} /></label>
           <label>Peso obiettivo<input type="number" step="0.1" value={profile.target_weight || ''} onChange={e => setProfile({ ...profile, target_weight: e.target.value })} /></label>
           <label>Data obiettivo<input type="date" value={profile.target_date || ''} onChange={e => setProfile({ ...profile, target_date: e.target.value })} /></label>
+          <label className="span2">Preferenze alimentari<input value={profile.food_preferences || ''} onChange={e => setProfile({ ...profile, food_preferences: e.target.value })} placeholder="es. pasta, riso, pollo, pesce" /></label>
+          <label className="span2">Alimenti da evitare<input value={profile.excluded_foods || ''} onChange={e => setProfile({ ...profile, excluded_foods: e.target.value })} placeholder="es. latte, yogurt, mela, farro" /></label>
+          <label className="span2">Altre allergie/intolleranze<input value={profile.custom_allergies || ''} onChange={e => setProfile({ ...profile, custom_allergies: e.target.value })} placeholder="es. kiwi, fragole, pomodoro" /></label>
           <label className="span2">Note obiettivo<input value={profile.goal_notes || ''} onChange={e => setProfile({ ...profile, goal_notes: e.target.value })} /></label>
+          <label className="span2">Note allergie e preferenze<input value={profile.allergy_notes || ''} onChange={e => setProfile({ ...profile, allergy_notes: e.target.value })} placeholder="es. rischio contaminazione, alimenti che tollero solo in piccole quantità" /></label>
         </div>
-        <div className="buttonRow"><button className="primary" onClick={saveProfile}>Salva profilo</button><button className="secondary" onClick={estimateAndSaveTarget}>Calcola calorie indicative</button></div>
+        <div className="restrictionPanel">
+          <h4>Restrizioni alimentari selezionabili</h4>
+          <p className="muted">Se selezioni allergie, intolleranze o preferenze, il generatore evita automaticamente gli alimenti compatibili con quelle restrizioni. Per allergie vere controlla sempre etichette e contaminazioni.</p>
+          {restrictionGroups.map(group => (
+            <div key={group.title} className="restrictionGroup">
+              <strong>{group.title}</strong>
+              <div className="checkGrid">
+                {group.options.map(option => {
+                  const checked = (Array.isArray(profile.selected_restrictions) ? profile.selected_restrictions : csvToArray(profile.selected_restrictions)).includes(option.key);
+                  return (
+                    <label key={option.key} className="checkCard">
+                      <input type="checkbox" checked={checked} onChange={() => toggleRestriction(option.key)} />
+                      <span>{option.label}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+          {activeRestrictions.length > 0 && <p className="notice">Restrizioni attive: {activeRestrictions.join(', ')}</p>}
+        </div>
+        <div className="buttonRow"><button className="primary" onClick={saveProfile}>Salva profilo</button><button className="secondary" onClick={estimateAndSaveTarget}>Calcola solo calorie</button><button className="primary" onClick={generatePersonalizedDiet}>Genera dieta personalizzata</button></div>
         <p className="muted">Target attuale: {target.kcal_target} kcal · P {target.protein_target} g · C {target.carbs_target} g · G {target.fat_target} g. Calcolo indicativo, non sostituisce medico o nutrizionista.</p>
+      </div>
+
+      <div className={`card wide ${preview.valid && !preview.realistic ? 'warningCard' : ''}`}>
+        <h3>Controllo obiettivo realistico</h3>
+        {!preview.valid && <p className="muted">{preview.message}</p>}
+        {preview.valid && (
+          <>
+            <div className="previewGrid">
+              <strong>{preview.kcal_target}<span>kcal/giorno</span></strong>
+              <strong>{preview.protein_target} g<span>proteine</span></strong>
+              <strong>{preview.carbs_target} g<span>carboidrati</span></strong>
+              <strong>{preview.fat_target} g<span>grassi</span></strong>
+            </div>
+            <p>{preview.message}</p>
+            <div className="pillRow">
+              <span className="pill">BMR {preview.bmr} kcal</span>
+              <span className="pill">Mantenimento {preview.tdee} kcal</span>
+              {preview.daily_deficit > 0 && <span className="pill">Deficit {preview.daily_deficit} kcal/giorno</span>}
+              {preview.daily_surplus > 0 && <span className="pill">Surplus {preview.daily_surplus} kcal/giorno</span>}
+            </div>
+            <p className="muted">Se chiedi un dimagrimento troppo rapido, l'app non crea una dieta estrema: abbassa il deficit e ti suggerisce una data più realistica.</p>
+          </>
+        )}
       </div>
     </section>
   );
@@ -847,6 +1051,17 @@ function statusLabel(status) {
 
 function measurementLabel(field) {
   return { weight: 'Peso kg', waist: 'Vita cm', hips: 'Fianchi cm', chest: 'Petto cm', abdomen: 'Addome cm', arm: 'Braccio cm', thigh: 'Coscia cm', neck: 'Collo cm' }[field] || field;
+}
+
+function csvToArray(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return value.map(String).map(item => item.trim()).filter(Boolean);
+  return String(value).split(/[,;\n]/).map(item => item.trim()).filter(Boolean);
+}
+
+function nullableDate(value) {
+  if (value === '' || value === null || value === undefined) return null;
+  return value;
 }
 
 function nullableNumber(value) {

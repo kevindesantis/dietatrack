@@ -33,7 +33,7 @@ button { cursor: pointer; }
 .eyebrow { margin: 0 0 4px; color: var(--primary); text-transform: uppercase; letter-spacing: .12em; font-size: 12px; font-weight: 800; }
 
 .dateCard, .tabs, .card { background: var(--card); border: 1px solid var(--line); box-shadow: 0 14px 40px rgba(16, 32, 28, .06); }
-.dateCard { border-radius: var(--radius); padding: 14px; display: flex; align-items: end; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
+.dateCard { border-radius: var(--radius); padding: 14px; display: flex; align-items: flex-end; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
 .tabs { position: sticky; top: 0; z-index: 5; display: flex; gap: 8px; overflow-x: auto; padding: 8px; border-radius: 18px; margin-bottom: 14px; }
 .tabs button { border: 0; background: transparent; padding: 12px 15px; border-radius: 14px; font-weight: 700; white-space: nowrap; color: var(--muted); }
 .tabs button.active { background: var(--primary); color: white; }
@@ -112,4 +112,26 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
   .logRow { grid-template-columns: 1fr; align-items: start; }
   .optionCard { align-items: stretch; flex-direction: column; }
   .foodHead { grid-template-columns: 1.6fr repeat(4, .55fr); font-size: 12px; }
+}
+
+.previewGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin: 14px 0; }
+.previewGrid strong { background: #f8faf9; border: 1px solid var(--line); border-radius: 18px; padding: 16px; font-size: 28px; }
+.previewGrid span { display: block; margin-top: 4px; font-size: 12px; color: var(--muted); font-weight: 700; }
+.warningCard { border-color: #facc15; background: #fffbea; }
+.pillRow { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
+.pill { display: inline-flex; align-items: center; border-radius: 999px; padding: 8px 12px; background: var(--soft); color: var(--primary-dark); font-size: 12px; font-weight: 900; }
+
+@media (max-width: 880px) {
+  .previewGrid { grid-template-columns: 1fr; }
+}
+
+.restrictionPanel { margin: 18px 0; padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: #f8faf9; }
+.restrictionPanel h4 { margin: 0 0 8px; }
+.restrictionGroup { margin-top: 14px; }
+.checkGrid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-top: 10px; }
+.checkCard { display: flex; align-items: center; gap: 9px; border: 1px solid var(--line); background: white; border-radius: 14px; padding: 10px 12px; font-weight: 800; }
+.checkCard input { width: auto; accent-color: var(--primary); }
+
+@media (max-width: 880px) {
+  .checkGrid { grid-template-columns: 1fr; }
 }
