@@ -145,3 +145,52 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 @media (max-width: 880px) {
   .suggestionGrid { grid-template-columns: 1fr; }
 }
+
+.adminViewing {
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  background: rgba(255,255,255,0.75);
+  border: 1px solid rgba(40, 83, 69, 0.14);
+  border-radius: 18px;
+  padding: 0.75rem 1rem;
+  min-width: 220px;
+}
+
+.adminViewing span {
+  color: var(--muted);
+  font-size: 0.92rem;
+  overflow-wrap: anywhere;
+}
+
+.userGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.85rem;
+  margin-top: 1rem;
+}
+
+.userCard {
+  border: 1px solid rgba(40, 83, 69, 0.12);
+  border-radius: 18px;
+  padding: 1rem;
+  background: #fff;
+  color: inherit;
+  text-align: left;
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  cursor: pointer;
+  box-shadow: var(--shadow-soft);
+}
+
+.userCard span,
+.userCard small {
+  color: var(--muted);
+  overflow-wrap: anywhere;
+}
+
+.userCard.activeUser {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(47, 119, 93, 0.15), var(--shadow-soft);
+}

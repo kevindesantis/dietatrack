@@ -22,6 +22,7 @@ import {
 
 const emptyProfile = {
   name: '',
+  email: '',
   sex: 'maschio',
   birth_date: '',
   height_cm: '',
@@ -78,7 +79,14 @@ export default function Home() {
   const [plannedForm, setPlannedForm] = useState({ weekday: 1, meal_type: 'pranzo', option_name: '', food_id: '', grams: 100, notes: '' });
   const [workoutForm, setWorkoutForm] = useState({ weekday: 1, title: '', exercises: '', notes: '' });
 
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [selectedManagedUserId, setSelectedManagedUserId] = useState('');
+
   const user = session?.user;
+  const activeUserId = isAdmin && selectedManagedUserId ? selectedManagedUserId : user?.id;
+  const selectedManagedUser = adminUsers.find(item => item.user_id === activeUserId);
+  const viewingOtherUser = Boolean(isAdmin && activeUserId && user?.id && activeUserId !== user.id);
   const totals = useMemo(() => sumLogs(logs), [logs]);
   const remain = useMemo(() => remaining(target, totals), [target, totals]);
   const currentWeekday = useMemo(() => new Date(`${selectedDate}T12:00:00`).getDay(), [selectedDate]);
@@ -97,6 +105,11 @@ export default function Home() {
     });
     const { data: listener } = supabase.auth.onAuthStateChange((_event, newSession) => {
       setSession(newSession);
+      if (!newSession) {
+        setIsAdmin(false);
+        setAdminUsers([]);
+        setSelectedManagedUserId('');
+      }
     });
     return () => {
       mounted = false;
@@ -106,8 +119,29 @@ export default function Home() {
 
   useEffect(() => {
     if (!user) return;
+    loadAdminStatus();
+  }, [user]);
+
+  useEffect(() => {
+    if (!activeUserId) return;
     loadAll();
-  }, [user, selectedDate]);
+  }, [activeUserId, selectedDate]);
+
+  async function loadAdminStatus() {
+    const { data, error } = await supabase.rpc('is_app_admin');
+    const admin = !error && data === true;
+    setIsAdmin(admin);
+    setSelectedManagedUserId(prev => prev || user.id);
+    if (admin) await loadManagedUsers();
+  }
+
+  async function loadManagedUsers() {
+    const { data, error } = await supabase
+      .from('profiles')
+      .select('user_id,email,name,sex,birth_date,height_cm,current_weight,start_weight,target_weight,target_date,activity_level,updated_at')
+      .order('name', { ascending: true, nullsFirst: false });
+    if (!error) setAdminUsers(data || []);
+  }
 
   async function loadAll() {
     setLoading(true);
@@ -127,15 +161,26 @@ export default function Home() {
   }
 
   async function loadProfile() {
-    const { data } = await supabase.from('profiles').select('*').eq('user_id', user.id).maybeSingle();
-    if (data) setProfile({ ...emptyProfile, ...data });
+    const { data } = await supabase.from('profiles').select('*').eq('user_id', activeUserId).maybeSingle();
+    if (data) {
+      setProfile({ ...emptyProfile, ...data });
+      return;
+    }
+    if (activeUserId === user.id) {
+      const fallback = { user_id: user.id, email: user.email, name: user.email?.split('@')[0] || '' };
+      await supabase.from('profiles').upsert(fallback, { onConflict: 'user_id' });
+      setProfile({ ...emptyProfile, ...fallback });
+      if (isAdmin) await loadManagedUsers();
+    } else {
+      setProfile(emptyProfile);
+    }
   }
 
   async function loadFoods() {
     const { data, error } = await supabase
       .from('foods')
       .select('*')
-      .or(`user_id.eq.${user.id},is_public.eq.true`)
+      .or(`user_id.eq.${activeUserId},is_public.eq.true`)
       .order('name');
     if (!error) setFoods(dedupeFoods(data || []));
   }
@@ -144,7 +189,7 @@ export default function Home() {
     const { data, error } = await supabase
       .from('food_logs')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', activeUserId)
       .eq('log_date', selectedDate)
       .order('created_at', { ascending: true });
     if (!error) setLogs(data || []);
@@ -154,7 +199,7 @@ export default function Home() {
     const { data } = await supabase
       .from('daily_targets')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', activeUserId)
       .eq('target_date', selectedDate)
       .maybeSingle();
     setTarget(data || emptyTarget);
@@ -164,7 +209,7 @@ export default function Home() {
     const { data } = await supabase
       .from('daily_status')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', activeUserId)
       .eq('status_date', selectedDate)
       .maybeSingle();
     setDailyStatus(data?.status || 'non_registrata');
@@ -174,7 +219,7 @@ export default function Home() {
     const { data } = await supabase
       .from('body_measurements')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', activeUserId)
       .order('measure_date', { ascending: true });
     setMeasurements(data || []);
   }
@@ -183,7 +228,7 @@ export default function Home() {
     const { data } = await supabase
       .from('planned_meal_options')
       .select('*, planned_meal_foods(*)')
-      .eq('user_id', user.id)
+      .eq('user_id', activeUserId)
       .eq('weekday', currentWeekday)
       .order('meal_type')
       .order('created_at');
@@ -194,7 +239,7 @@ export default function Home() {
     const { data } = await supabase
       .from('workout_schedule')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', activeUserId)
       .eq('weekday', currentWeekday)
       .order('created_at');
     setWorkouts(data || []);
@@ -204,7 +249,7 @@ export default function Home() {
     const { data } = await supabase
       .from('workout_logs')
       .select('*')
-      .eq('user_id', user.id)
+      .eq('user_id', activeUserId)
       .eq('log_date', selectedDate)
       .maybeSingle();
     setWorkoutLog(data);
@@ -284,8 +329,9 @@ export default function Home() {
 
   async function persistProfile() {
     const payload = {
-      user_id: user.id,
+      user_id: activeUserId,
       ...profile,
+      email: profile.email || (activeUserId === user.id ? user.email : null),
       birth_date: nullableDate(profile.birth_date),
       target_date: nullableDate(profile.target_date),
       height_cm: nullableNumber(profile.height_cm),
@@ -306,12 +352,13 @@ export default function Home() {
 
   async function saveProfile() {
     const { error } = await persistProfile();
+    if (!error && isAdmin) await loadManagedUsers();
     setMessage(error ? error.message : 'Profilo salvato.');
   }
 
   async function saveTarget(nextTarget = target) {
     const payload = {
-      user_id: user.id,
+      user_id: activeUserId,
       target_date: selectedDate,
       kcal_target: Number(nextTarget.kcal_target || 0),
       protein_target: Number(nextTarget.protein_target || 0),
@@ -362,7 +409,7 @@ export default function Home() {
 
     await supabase.from('diet_generations').insert({
       id: generationId,
-      user_id: user.id,
+      user_id: activeUserId,
       title: `Dieta ${plan.goal_type} - ${selectedDate}`,
       goal_type: plan.goal_type,
       realistic: plan.realistic,
@@ -380,12 +427,12 @@ export default function Home() {
     await supabase
       .from('planned_meal_options')
       .delete()
-      .eq('user_id', user.id)
+      .eq('user_id', activeUserId)
       .eq('source', 'generated');
 
     for (const option of week.options) {
       const { data: insertedOption, error } = await supabase.from('planned_meal_options').insert({
-        user_id: user.id,
+        user_id: activeUserId,
         generation_id: generationId,
         source: 'generated',
         weekday: option.weekday,
@@ -401,7 +448,7 @@ export default function Home() {
       }
 
       const rows = option.items.map(item => ({
-        user_id: user.id,
+        user_id: activeUserId,
         option_id: insertedOption.id,
         food_id: item.food_id,
         food_name: item.food_name,
@@ -424,7 +471,7 @@ export default function Home() {
     }
 
     const targetRows = targetDatesForPlan(plan, selectedDate).map(date => ({
-      user_id: user.id,
+      user_id: activeUserId,
       target_date: date,
       kcal_target: plan.kcal_target,
       protein_target: plan.protein_target,
@@ -443,7 +490,7 @@ export default function Home() {
   async function saveManualFood() {
     if (!manualFood.name.trim()) return setMessage('Inserisci il nome alimento.');
     const payload = {
-      user_id: user.id,
+      user_id: activeUserId,
       name: manualFood.name.trim(),
       brand: manualFood.brand || null,
       category: manualFood.category || null,
@@ -476,7 +523,7 @@ export default function Home() {
       const p = json.product;
       const n = p.nutriments || {};
       const payload = {
-        user_id: user.id,
+        user_id: activeUserId,
         name: p.product_name || `Prodotto ${barcode}`,
         brand: p.brands || null,
         category: p.categories_tags?.[0]?.replace('en:', '') || null,
@@ -512,7 +559,7 @@ export default function Home() {
     if (g <= 0) return setMessage('Inserisci i grammi.');
     const calc = calculateNutrition(food, g);
     const payload = {
-      user_id: user.id,
+      user_id: activeUserId,
       food_id: food.id,
       log_date: selectedDate,
       meal_type: mealType,
@@ -529,7 +576,7 @@ export default function Home() {
   async function addSuggestedFoodLog(suggestion, meal = mealType) {
     if (!suggestion?.food_id) return setMessage('Suggerimento non valido.');
     const payload = {
-      user_id: user.id,
+      user_id: activeUserId,
       food_id: suggestion.food_id,
       log_date: selectedDate,
       meal_type: meal,
@@ -551,13 +598,13 @@ export default function Home() {
   }
 
   async function deleteLog(id) {
-    await supabase.from('food_logs').delete().eq('id', id).eq('user_id', user.id);
+    await supabase.from('food_logs').delete().eq('id', id).eq('user_id', activeUserId);
     await loadLogs();
   }
 
   async function setStatus(status, showMessage = true) {
     const { error } = await supabase.from('daily_status').upsert({
-      user_id: user.id,
+      user_id: activeUserId,
       status_date: selectedDate,
       status
     }, { onConflict: 'user_id,status_date' });
@@ -567,7 +614,7 @@ export default function Home() {
 
   async function saveMeasurement() {
     const payload = {
-      user_id: user.id,
+      user_id: activeUserId,
       measure_date: selectedDate,
       weight: nullableNumber(measurementForm.weight),
       waist: nullableNumber(measurementForm.waist),
@@ -594,7 +641,7 @@ export default function Home() {
     const g = Number(plannedForm.grams || 0);
     const calc = calculateNutrition(food, g);
     const { data: option, error } = await supabase.from('planned_meal_options').insert({
-      user_id: user.id,
+      user_id: activeUserId,
       weekday: Number(plannedForm.weekday),
       meal_type: plannedForm.meal_type,
       option_name: plannedForm.option_name || `${food.name} ${g} g`,
@@ -602,7 +649,7 @@ export default function Home() {
     }).select().single();
     if (error) return setMessage(error.message);
     const { error: itemError } = await supabase.from('planned_meal_foods').insert({
-      user_id: user.id,
+      user_id: activeUserId,
       option_id: option.id,
       food_id: food.id,
       food_name: [food.name, food.brand].filter(Boolean).join(' - '),
@@ -617,7 +664,7 @@ export default function Home() {
 
   async function eatPlannedOption(option) {
     const rows = (option.planned_meal_foods || []).map(item => ({
-      user_id: user.id,
+      user_id: activeUserId,
       food_id: item.food_id,
       log_date: selectedDate,
       meal_type: option.meal_type,
@@ -640,14 +687,14 @@ export default function Home() {
   }
 
   async function deletePlannedOption(id) {
-    await supabase.from('planned_meal_options').delete().eq('id', id).eq('user_id', user.id);
+    await supabase.from('planned_meal_options').delete().eq('id', id).eq('user_id', activeUserId);
     await loadPlannedOptions();
   }
 
   async function saveWorkout() {
     if (!workoutForm.title.trim()) return setMessage('Inserisci il titolo allenamento.');
     const { error } = await supabase.from('workout_schedule').insert({
-      user_id: user.id,
+      user_id: activeUserId,
       weekday: Number(workoutForm.weekday),
       title: workoutForm.title,
       exercises: workoutForm.exercises,
@@ -661,7 +708,7 @@ export default function Home() {
 
   async function setWorkoutStatus(status) {
     const { error } = await supabase.from('workout_logs').upsert({
-      user_id: user.id,
+      user_id: activeUserId,
       log_date: selectedDate,
       status
     }, { onConflict: 'user_id,log_date' });
@@ -712,11 +759,17 @@ export default function Home() {
       <section className="dateCard">
         <label>Giorno<input type="date" value={selectedDate} onChange={e => setSelectedDate(e.target.value)} /></label>
         <div className={`statusPill ${dailyStatus}`}>{statusLabel(dailyStatus)}</div>
+        {isAdmin && (
+          <div className="adminViewing">
+            <strong>{viewingOtherUser ? 'Stai gestendo un utente' : 'Modalità admin'}</strong>
+            <span>{selectedManagedUser?.name || selectedManagedUser?.email || (viewingOtherUser ? activeUserId : user.email)}</span>
+          </div>
+        )}
       </section>
 
       <nav className="tabs">
         {[
-          ['oggi', 'Oggi'], ['dieta', 'Dieta'], ['alimenti', 'Alimenti'], ['misure', 'Misure'], ['allenamento', 'Allenamento'], ['profilo', 'Profilo']
+          ['oggi', 'Oggi'], ['dieta', 'Dieta'], ['alimenti', 'Alimenti'], ['misure', 'Misure'], ['allenamento', 'Allenamento'], ['profilo', 'Profilo'], ...(isAdmin ? [['admin', 'Admin']] : [])
         ].map(([value, label]) => <button key={value} className={tab === value ? 'active' : ''} onClick={() => setTab(value)}>{label}</button>)}
       </nav>
 
@@ -809,9 +862,51 @@ export default function Home() {
           generatePersonalizedDiet={generatePersonalizedDiet}
           selectedDate={selectedDate}
           target={target}
+          viewingOtherUser={viewingOtherUser}
+          selectedManagedUser={selectedManagedUser}
+        />
+      )}
+
+      {tab === 'admin' && isAdmin && (
+        <AdminTab
+          adminUsers={adminUsers}
+          selectedManagedUserId={selectedManagedUserId}
+          setSelectedManagedUserId={setSelectedManagedUserId}
+          refreshUsers={loadManagedUsers}
         />
       )}
     </main>
+  );
+}
+
+function AdminTab({ adminUsers, selectedManagedUserId, setSelectedManagedUserId, refreshUsers }) {
+  const sortedUsers = [...(adminUsers || [])].sort((a, b) => (a.name || a.email || '').localeCompare(b.name || b.email || ''));
+  return (
+    <section className="grid">
+      <div className="card wide">
+        <h3>Gestione utenti</h3>
+        <p className="muted">Seleziona un utente registrato: dopo la selezione, le sezioni Oggi, Dieta, Misure, Allenamento e Profilo mostreranno e modificheranno i suoi dati.</p>
+        <button className="secondary" onClick={refreshUsers}>Aggiorna elenco utenti</button>
+        <div className="userGrid">
+          {sortedUsers.map(item => {
+            const active = item.user_id === selectedManagedUserId;
+            return (
+              <button key={item.user_id} className={`userCard ${active ? 'activeUser' : ''}`} onClick={() => setSelectedManagedUserId(item.user_id)}>
+                <strong>{item.name || item.email || 'Utente senza nome'}</strong>
+                <span>{item.email || item.user_id}</span>
+                <small>Peso: {item.current_weight || item.start_weight || '-'} kg · Obiettivo: {item.target_weight || '-'} kg</small>
+                <small>Altezza: {item.height_cm || '-'} cm · Attività: {item.activity_level || '-'}</small>
+              </button>
+            );
+          })}
+        </div>
+        {!sortedUsers.length && <p className="muted">Non ci sono ancora profili. Gli utenti compariranno qui dopo la registrazione/accesso o dopo l'esecuzione dello SQL aggiornato.</p>}
+      </div>
+      <div className="card wide warningCard">
+        <h3>Permessi admin</h3>
+        <p>Solo le email presenti nella tabella <code>app_admins</code> possono vedere e modificare i dati degli altri utenti. Gli utenti normali continuano a vedere solo il proprio profilo.</p>
+      </div>
+    </section>
   );
 }
 
@@ -1041,7 +1136,7 @@ function WorkoutTab({ workouts, workoutForm, setWorkoutForm, saveWorkout, workou
   );
 }
 
-function ProfileTab({ profile, setProfile, saveProfile, estimateAndSaveTarget, generatePersonalizedDiet, selectedDate, target }) {
+function ProfileTab({ profile, setProfile, saveProfile, estimateAndSaveTarget, generatePersonalizedDiet, selectedDate, target, viewingOtherUser, selectedManagedUser }) {
   const preview = estimatePersonalizedPlan(profile, selectedDate);
   const activeRestrictions = restrictionSummary(profile);
 
@@ -1057,6 +1152,7 @@ function ProfileTab({ profile, setProfile, saveProfile, estimateAndSaveTarget, g
         <h3>Profilo dieta</h3>
         <p className="muted">Compila questi dati per usare l'app in due modi: inserire la tua dieta manuale oppure generare una proposta automatica modificabile.</p>
         <div className="formGrid four">
+          {viewingOtherUser && <p className="notice">Stai modificando il profilo di {selectedManagedUser?.name || selectedManagedUser?.email || profile.email || 'questo utente'}.</p>}
           <label>Nome<input value={profile.name || ''} onChange={e => setProfile({ ...profile, name: e.target.value })} /></label>
           <label>Sesso<select value={profile.sex || 'maschio'} onChange={e => setProfile({ ...profile, sex: e.target.value })}><option value="maschio">Maschio</option><option value="femmina">Femmina</option></select></label>
           <label>Data nascita<input type="date" value={profile.birth_date || ''} onChange={e => setProfile({ ...profile, birth_date: e.target.value })} /></label>
@@ -1170,7 +1266,7 @@ function dedupeFoods(items) {
 }
 
 function labelForTab(tab) {
-  return { dieta: 'Dieta settimanale', alimenti: 'Archivio alimenti', misure: 'Peso e misure', allenamento: 'Allenamento', profilo: 'Profilo' }[tab] || tab;
+  return { dieta: 'Dieta settimanale', alimenti: 'Archivio alimenti', misure: 'Peso e misure', allenamento: 'Allenamento', profilo: 'Profilo', admin: 'Gestione utenti' }[tab] || tab;
 }
 
 function statusLabel(status) {
