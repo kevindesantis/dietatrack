@@ -135,3 +135,13 @@ input:focus, select:focus, textarea:focus { border-color: var(--primary); box-sh
 @media (max-width: 880px) {
   .checkGrid { grid-template-columns: 1fr; }
 }
+
+
+.suggestionGrid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.suggestionCard { background: #f8faf9; border: 1px solid var(--line); border-radius: 18px; padding: 14px; display: grid; gap: 9px; }
+.suggestionCard h4 { margin: 0; }
+.suggestionCard p { margin: 0; color: var(--muted); line-height: 1.45; }
+
+@media (max-width: 880px) {
+  .suggestionGrid { grid-template-columns: 1fr; }
+}

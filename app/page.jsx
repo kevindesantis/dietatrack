@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { supabase } from '../lib/supabaseClient';
 import {
+  buildDailySuggestions,
   buildGeneratedDietWeek,
   calculateNutrition,
   estimatePersonalizedPlan,
@@ -86,6 +87,7 @@ export default function Home() {
     if (!q) return foods.slice(0, 40);
     return foods.filter(food => `${food.name} ${food.brand || ''} ${food.category || ''} ${food.barcode || ''}`.toLowerCase().includes(q)).slice(0, 60);
   }, [foods, foodSearch]);
+  const dailySuggestions = useMemo(() => buildDailySuggestions(foods, target, totals, profile), [foods, target, totals, profile]);
 
   useEffect(() => {
     let mounted = true;
@@ -135,7 +137,7 @@ export default function Home() {
       .select('*')
       .or(`user_id.eq.${user.id},is_public.eq.true`)
       .order('name');
-    if (!error) setFoods(data || []);
+    if (!error) setFoods(dedupeFoods(data || []));
   }
 
   async function loadLogs() {
@@ -524,6 +526,30 @@ export default function Home() {
     setMessage('Alimento aggiunto al diario.');
   }
 
+  async function addSuggestedFoodLog(suggestion, meal = mealType) {
+    if (!suggestion?.food_id) return setMessage('Suggerimento non valido.');
+    const payload = {
+      user_id: user.id,
+      food_id: suggestion.food_id,
+      log_date: selectedDate,
+      meal_type: meal,
+      food_name: suggestion.food_name,
+      grams: suggestion.grams,
+      kcal: suggestion.kcal,
+      protein: suggestion.protein,
+      carbs: suggestion.carbs,
+      fat: suggestion.fat,
+      fiber: suggestion.fiber || 0,
+      sugar: suggestion.sugar || 0,
+      salt: suggestion.salt || 0,
+      notes: `Suggerito dall'app per rientrare nei valori giornalieri`
+    };
+    const { error } = await supabase.from('food_logs').insert(payload);
+    if (error) return setMessage(error.message);
+    await Promise.all([loadLogs(), setStatus('parziale', false)]);
+    setMessage('Suggerimento aggiunto al diario. Puoi continuare a scegliere altri alimenti finché rientri nei valori.');
+  }
+
   async function deleteLog(id) {
     await supabase.from('food_logs').delete().eq('id', id).eq('user_id', user.id);
     await loadLogs();
@@ -719,6 +745,8 @@ export default function Home() {
           targetSaver={saveTarget}
           plannedOptions={plannedOptions}
           eatPlannedOption={eatPlannedOption}
+          dailySuggestions={dailySuggestions}
+          addSuggestedFoodLog={addSuggestedFoodLog}
           workouts={workouts}
           workoutLog={workoutLog}
           setWorkoutStatus={setWorkoutStatus}
@@ -788,7 +816,7 @@ export default function Home() {
 }
 
 function Dashboard(props) {
-  const { totals, target, remain, logs, mealType, setMealType, filteredFoods, foodSearch, setFoodSearch, selectedFoodId, setSelectedFoodId, grams, setGrams, addFoodLog, deleteLog, setStatus, targetSetter, targetSaver, plannedOptions, eatPlannedOption, workouts, workoutLog, setWorkoutStatus } = props;
+  const { totals, target, remain, logs, mealType, setMealType, filteredFoods, foodSearch, setFoodSearch, selectedFoodId, setSelectedFoodId, grams, setGrams, addFoodLog, deleteLog, setStatus, targetSetter, targetSaver, plannedOptions, eatPlannedOption, dailySuggestions, addSuggestedFoodLog, workouts, workoutLog, setWorkoutStatus } = props;
 
   return (
     <section className="grid">
@@ -824,6 +852,22 @@ function Dashboard(props) {
           <label>Grammi<input type="number" min="1" value={grams} onChange={e => setGrams(e.target.value)} /></label>
         </div>
         <button className="primary" onClick={addFoodLog}>Aggiungi al diario</button>
+      </div>
+
+      <div className="card wide">
+        <h3>Proposte per rientrare nei valori di oggi</h3>
+        <p className="muted">Queste non sono obbligatorie: sono alimenti/porzioni compatibili con le calorie e i macro che ti mancano. Scegli tu cosa mangiare e l'app aggiorna automaticamente i rimanenti.</p>
+        {!dailySuggestions?.length && <p className="muted">Non ci sono suggerimenti: aggiungi altri alimenti nell'archivio oppure controlla le restrizioni nel profilo.</p>}
+        <div className="suggestionGrid">
+          {(dailySuggestions || []).map(suggestion => (
+            <article className="suggestionCard" key={`${suggestion.food_id}-${suggestion.grams}`}>
+              <span className="mealBadge">{suggestion.reason}</span>
+              <h4>{suggestion.food_name}</h4>
+              <p>{suggestion.grams} g · {round(suggestion.kcal, 0)} kcal · P {round(suggestion.protein, 1)} · C {round(suggestion.carbs, 1)} · G {round(suggestion.fat, 1)}</p>
+              <button className="secondary" onClick={() => addSuggestedFoodLog(suggestion)}>Aggiungi</button>
+            </article>
+          ))}
+        </div>
       </div>
 
       <div className="card wide">
@@ -1022,7 +1066,7 @@ function ProfileTab({ profile, setProfile, saveProfile, estimateAndSaveTarget, g
           <label>Peso iniziale<input type="number" step="0.1" value={profile.start_weight || ''} onChange={e => setProfile({ ...profile, start_weight: e.target.value })} /></label>
           <label>Peso attuale<input type="number" step="0.1" value={profile.current_weight || ''} onChange={e => setProfile({ ...profile, current_weight: e.target.value })} /></label>
           <label>Peso obiettivo<input type="number" step="0.1" value={profile.target_weight || ''} onChange={e => setProfile({ ...profile, target_weight: e.target.value })} /></label>
-          <label>Data obiettivo<input type="date" value={profile.target_date || ''} onChange={e => setProfile({ ...profile, target_date: e.target.value })} /></label>
+          <label>Data obiettivo<input type="date" value={profile.target_date || ''} onChange={e => setProfile({ ...profile, target_date: e.target.value })} /><small className="muted">Se la lasci vuota, l’app usa un ritmo sostenibile e calcola una data indicativa.</small></label>
           <label className="span2">Preferenze alimentari<input value={profile.food_preferences || ''} onChange={e => setProfile({ ...profile, food_preferences: e.target.value })} placeholder="es. pasta, riso, pollo, pesce" /></label>
           <label className="span2">Alimenti da evitare<input value={profile.excluded_foods || ''} onChange={e => setProfile({ ...profile, excluded_foods: e.target.value })} placeholder="es. latte, yogurt, mela, farro" /></label>
           <label className="span2">Altre allergie/intolleranze<input value={profile.custom_allergies || ''} onChange={e => setProfile({ ...profile, custom_allergies: e.target.value })} placeholder="es. kiwi, fragole, pomodoro" /></label>
@@ -1104,6 +1148,25 @@ function LineChart({ data, field }) {
     return `${x},${y}`;
   }).join(' ');
   return <svg className="chart" viewBox={`0 0 ${width} ${height}`} role="img"><polyline fill="none" stroke="currentColor" strokeWidth="4" points={coords} />{points.map((p, i) => { const [x, y] = coords.split(' ')[i].split(','); return <circle key={p.date} cx={x} cy={y} r="5" fill="currentColor" />; })}<text x="24" y="24">{max} kg</text><text x="24" y="210">{min} kg</text></svg>;
+}
+
+
+function dedupeFoods(items) {
+  const seen = new Set();
+  const result = [];
+  for (const food of items) {
+    const key = [
+      food.user_id || 'public',
+      String(food.name || '').trim().toLowerCase(),
+      String(food.brand || '').trim().toLowerCase(),
+      String(food.barcode || '').trim().toLowerCase(),
+      food.source || ''
+    ].join('|');
+    if (seen.has(key)) continue;
+    seen.add(key);
+    result.push(food);
+  }
+  return result;
 }
 
 function labelForTab(tab) {
