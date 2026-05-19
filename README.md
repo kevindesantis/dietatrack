@@ -108,3 +108,14 @@ Quando Vercel ti dà il link pubblico:
 ## Nota salute
 
 Il calcolo calorie/macros è indicativo. Per dieta clinica, analisi alterate, farmaci, patologie o obiettivi importanti serve medico/nutrizionista. In caso di allergie vere, la web app aiuta a filtrare gli alimenti ma non può garantire l’assenza di contaminazioni: bisogna controllare sempre etichette e indicazioni mediche.
+
+
+## Problema registrazione/email Supabase
+
+Se dopo la registrazione non arriva nessuna email e non riesci ad accedere, controlla Supabase:
+
+1. Per test veloci: vai in `Authentication > Providers > Email` e disattiva `Confirm email`. In questo modo l'utente entra subito dopo la registrazione.
+2. Se vuoi mantenere la conferma email: vai in `Authentication > URL Configuration`, imposta `Site URL` con il dominio Vercel della web app e aggiungi lo stesso dominio in `Redirect URLs`.
+3. Per uso reale: configura un SMTP personalizzato in `Authentication > SMTP Settings`, altrimenti il servizio email predefinito di Supabase è molto limitato.
+
+Il codice usa già `emailRedirectTo: window.location.origin`, quindi il link di conferma torna al dominio dove è pubblicata la web app.
