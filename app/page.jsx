@@ -75,6 +75,9 @@ export default function Home() {
     name: '', brand: '', category: '', barcode: '', allergens: '', tags: '', kcal_100g: '', protein_100g: '', carbs_100g: '', fat_100g: '', fiber_100g: '', sugar_100g: '', salt_100g: ''
   });
   const [barcode, setBarcode] = useState('');
+  const [onlineFoodQuery, setOnlineFoodQuery] = useState('');
+  const [onlineFoodResults, setOnlineFoodResults] = useState([]);
+  const [onlineFoodLoading, setOnlineFoodLoading] = useState(false);
   const [measurementForm, setMeasurementForm] = useState({ weight: '', waist: '', hips: '', chest: '', abdomen: '', arm: '', thigh: '', neck: '', notes: '' });
   const [plannedForm, setPlannedForm] = useState({ weekday: 1, meal_type: 'pranzo', option_name: '', food_id: '', grams: 100, notes: '' });
   const [workoutForm, setWorkoutForm] = useState({ weekday: 1, title: '', exercises: '', notes: '' });
@@ -514,39 +517,83 @@ export default function Home() {
     setMessage('Alimento salvato.');
   }
 
+  function openFoodFactsPayload(product, fallbackBarcode = '') {
+    const p = product || {};
+    const n = p.nutriments || {};
+    const code = String(p.code || fallbackBarcode || '').trim();
+    return {
+      user_id: activeUserId,
+      name: p.product_name || p.product_name_it || p.product_name_en || `Prodotto ${code || 'senza barcode'}`,
+      brand: p.brands || null,
+      category: p.categories_tags?.[0]?.replace(/^[a-z]{2}:/, '').replace(/-/g, ' ') || p.categories || null,
+      barcode: code || null,
+      kcal_100g: Number(n['energy-kcal_100g'] || n['energy-kcal_serving'] || 0),
+      protein_100g: Number(n.proteins_100g || 0),
+      carbs_100g: Number(n.carbohydrates_100g || 0),
+      fat_100g: Number(n.fat_100g || 0),
+      fiber_100g: Number(n.fiber_100g || 0),
+      sugar_100g: Number(n.sugars_100g || 0),
+      salt_100g: Number(n.salt_100g || 0),
+      allergens: (p.allergens_tags || []).map(tag => tag.replace(/^[a-z]{2}:/, '').replace(/-/g, ' ')),
+      tags: [...(p.labels_tags || []), ...(p.categories_tags || [])].map(tag => tag.replace(/^[a-z]{2}:/, '').replace(/-/g, ' ')).slice(0, 20),
+      source: 'openfoodfacts',
+      is_public: false
+    };
+  }
+
+  async function saveOpenFoodFactsProduct(product, fallbackBarcode = '') {
+    const payload = openFoodFactsPayload(product, fallbackBarcode);
+    if (!payload.name || !Number(payload.kcal_100g || 0)) {
+      return setMessage('Prodotto trovato, ma mancano calorie o valori nutrizionali. Puoi inserirlo manualmente leggendo l’etichetta.');
+    }
+    const query = payload.barcode
+      ? supabase.from('foods').upsert(payload, { onConflict: 'user_id,barcode' })
+      : supabase.from('foods').insert(payload);
+    const { error } = await query;
+    if (error) return setMessage(error.message);
+    await loadFoods();
+    setMessage('Prodotto importato da Open Food Facts. Controlla sempre i valori perché possono essere incompleti o diversi dall’etichetta.');
+  }
+
   async function importBarcode() {
     if (!barcode.trim()) return setMessage('Inserisci un codice a barre.');
     try {
       const response = await fetch(`https://world.openfoodfacts.org/api/v2/product/${barcode.trim()}.json`);
       const json = await response.json();
       if (!json.product) return setMessage('Prodotto non trovato su Open Food Facts.');
-      const p = json.product;
-      const n = p.nutriments || {};
-      const payload = {
-        user_id: activeUserId,
-        name: p.product_name || `Prodotto ${barcode}`,
-        brand: p.brands || null,
-        category: p.categories_tags?.[0]?.replace('en:', '') || null,
-        barcode: barcode.trim(),
-        kcal_100g: Number(n['energy-kcal_100g'] || n['energy-kcal_serving'] || 0),
-        protein_100g: Number(n.proteins_100g || 0),
-        carbs_100g: Number(n.carbohydrates_100g || 0),
-        fat_100g: Number(n.fat_100g || 0),
-        fiber_100g: Number(n.fiber_100g || 0),
-        sugar_100g: Number(n.sugars_100g || 0),
-        salt_100g: Number(n.salt_100g || 0),
-        allergens: (p.allergens_tags || []).map(tag => tag.replace(/^en:/, '').replace(/-/g, ' ')),
-        tags: [...(p.labels_tags || []), ...(p.categories_tags || [])].map(tag => tag.replace(/^en:/, '').replace(/-/g, ' ')).slice(0, 20),
-        source: 'openfoodfacts',
-        is_public: false
-      };
-      const { error } = await supabase.from('foods').upsert(payload, { onConflict: 'user_id,barcode' });
-      if (error) return setMessage(error.message);
+      await saveOpenFoodFactsProduct({ ...json.product, code: json.code || barcode.trim() }, barcode.trim());
       setBarcode('');
-      await loadFoods();
-      setMessage('Prodotto importato da Open Food Facts. Controlla sempre i valori perché possono essere incompleti.');
     } catch (error) {
       setMessage('Errore durante il collegamento a Open Food Facts.');
+    }
+  }
+
+  async function searchOnlineFoods() {
+    const q = onlineFoodQuery.trim();
+    if (q.length < 2) return setMessage('Scrivi almeno 2 caratteri per cercare online.');
+    setOnlineFoodLoading(true);
+    setOnlineFoodResults([]);
+    try {
+      const params = new URLSearchParams({
+        search_terms: q,
+        search_simple: '1',
+        action: 'process',
+        json: '1',
+        page_size: '12',
+        fields: 'code,product_name,product_name_it,product_name_en,brands,categories,categories_tags,labels_tags,allergens_tags,nutriments'
+      });
+      const response = await fetch(`https://world.openfoodfacts.org/cgi/search.pl?${params.toString()}`);
+      const json = await response.json();
+      const products = (json.products || [])
+        .filter(item => item.product_name || item.product_name_it || item.product_name_en)
+        .filter(item => Number(item.nutriments?.['energy-kcal_100g'] || 0) > 0)
+        .slice(0, 12);
+      setOnlineFoodResults(products);
+      setMessage(products.length ? `Trovati ${products.length} prodotti online. Importa quello corretto e controlla l’etichetta.` : 'Nessun prodotto con valori nutrizionali trovato online.');
+    } catch (error) {
+      setMessage('Errore durante la ricerca online.');
+    } finally {
+      setOnlineFoodLoading(false);
     }
   }
 
@@ -830,6 +877,12 @@ export default function Home() {
           barcode={barcode}
           setBarcode={setBarcode}
           importBarcode={importBarcode}
+          onlineFoodQuery={onlineFoodQuery}
+          setOnlineFoodQuery={setOnlineFoodQuery}
+          onlineFoodResults={onlineFoodResults}
+          onlineFoodLoading={onlineFoodLoading}
+          searchOnlineFoods={searchOnlineFoods}
+          saveOpenFoodFactsProduct={saveOpenFoodFactsProduct}
         />
       )}
 
@@ -1034,7 +1087,7 @@ function Dashboard(props) {
   );
 }
 
-function FoodsTab({ foods, filteredFoods, foodSearch, setFoodSearch, manualFood, setManualFood, saveManualFood, barcode, setBarcode, importBarcode }) {
+function FoodsTab({ foods, filteredFoods, foodSearch, setFoodSearch, manualFood, setManualFood, saveManualFood, barcode, setBarcode, importBarcode, onlineFoodQuery, setOnlineFoodQuery, onlineFoodResults, onlineFoodLoading, searchOnlineFoods, saveOpenFoodFactsProduct }) {
   return (
     <section className="grid">
       <div className="card wide">
@@ -1042,6 +1095,29 @@ function FoodsTab({ foods, filteredFoods, foodSearch, setFoodSearch, manualFood,
         <p className="muted">Utile per alimenti confezionati. I dati arrivano da Open Food Facts: controllali sempre.</p>
         <div className="formGrid two"><label>Codice a barre<input value={barcode} onChange={e => setBarcode(e.target.value)} placeholder="es. 800..." /></label></div>
         <button className="primary" onClick={importBarcode}>Importa prodotto</button>
+      </div>
+      <div className="card wide">
+        <h3>Cerca prodotto online per nome</h3>
+        <p className="muted">Utile quando non hai il codice a barre: cerca prodotti confezionati o piatti già presenti su Open Food Facts. Non cercare a ogni lettera: scrivi il nome e premi il pulsante.</p>
+        <div className="formGrid two">
+          <label>Nome prodotto<input value={onlineFoodQuery} onChange={e => setOnlineFoodQuery(e.target.value)} placeholder="es. Nippon, bastoncini Findus, spinacine" /></label>
+        </div>
+        <button className="primary" onClick={searchOnlineFoods} disabled={onlineFoodLoading}>{onlineFoodLoading ? 'Cerco...' : 'Cerca online'}</button>
+        {onlineFoodResults.length > 0 && <div className="foodTable onlineResults">
+          <div className="foodHead"><span>Prodotto</span><span>Kcal</span><span>P</span><span>C</span><span>G</span><span></span></div>
+          {onlineFoodResults.map(product => {
+            const n = product.nutriments || {};
+            const name = product.product_name || product.product_name_it || product.product_name_en || 'Prodotto';
+            return <div className="foodHead foodRow" key={product.code || name}>
+              <span>{name}{product.brands ? ` - ${product.brands}` : ''}</span>
+              <span>{Number(n['energy-kcal_100g'] || 0)}</span>
+              <span>{Number(n.proteins_100g || 0)}</span>
+              <span>{Number(n.carbohydrates_100g || 0)}</span>
+              <span>{Number(n.fat_100g || 0)}</span>
+              <button className="secondary small" onClick={() => saveOpenFoodFactsProduct(product, product.code)}>Importa</button>
+            </div>;
+          })}
+        </div>}
       </div>
       <div className="card wide">
         <h3>Aggiungi alimento manuale</h3>
