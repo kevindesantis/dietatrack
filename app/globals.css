@@ -210,3 +210,22 @@ button.small {
     grid-template-columns: 1fr;
   }
 }
+
+.workoutProfilePanel { margin: 18px 0; padding: 16px; border: 1px solid var(--line); border-radius: 18px; background: #f8faf9; }
+.workoutProfilePanel h4 { margin: 0 0 8px; }
+
+.portionPanel {
+  margin: 14px 0;
+  padding: 14px;
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  background: #f8faf9;
+}
+.portionPanel p { margin: 6px 0 0; color: var(--muted); }
+.quickPortions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.overLimit { color: #b42318; }
+.smallNotice { margin-top: 12px; font-size: 13px; }
+.foodHeadSix { grid-template-columns: 2fr 1.3fr repeat(4, .7fr); }
+@media (max-width: 880px) {
+  .foodHeadSix { grid-template-columns: 1fr; }
+}
