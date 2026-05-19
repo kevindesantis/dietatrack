@@ -14,8 +14,13 @@ Non serve creare `.env.local`.
 ## Funzioni incluse
 
 - Login/registrazione con email e password tramite Supabase
-- Profilo personale: sesso, data nascita, altezza, peso iniziale, peso attuale, peso obiettivo
+- Profilo personale: sesso, data nascita, altezza, peso iniziale, peso attuale, peso obiettivo e data obiettivo
+- Preferenze alimentari, alimenti da evitare, allergie e intolleranze selezionabili
 - Calcolo indicativo di calorie, proteine, carboidrati e grassi
+- Controllo obiettivo realistico: se il tempo richiesto è troppo aggressivo, la web app propone un ritmo più sostenibile
+- Generatore dieta personalizzata settimanale con opzioni modificabili per colazione, pranzo, merenda e cena
+- Filtri automatici nel generatore per lattosio, glutine/celiachia, uova, pesce, crostacei/molluschi, frutta secca, arachidi, soia, sesamo, nichel alto e preferenze come vegetariano/vegano/no maiale/no pesce
+- Blocco di sicurezza quando provi ad aggiungere al diario un alimento che corrisponde alle restrizioni impostate nel profilo
 - Archivio alimenti con valori per 100 g
 - Alimenti base già inclusi nel database
 - Inserimento manuale alimenti
@@ -47,11 +52,12 @@ Questo crea:
 - archivio alimenti
 - diario alimentare
 - obiettivi giornalieri
-- dieta settimanale
+- dieta settimanale manuale e generata
+- storico generazioni dieta
 - misure corporee
 - allenamenti
 - policy RLS per proteggere i dati utente
-- alimenti base pubblici
+- alimenti base pubblici con allergeni/tag principali
 
 ## 2. Caricamento su GitHub
 
@@ -101,4 +107,4 @@ Quando Vercel ti dà il link pubblico:
 
 ## Nota salute
 
-Il calcolo calorie/macros è indicativo. Per dieta clinica, analisi alterate, farmaci, patologie o obiettivi importanti serve medico/nutrizionista.
+Il calcolo calorie/macros è indicativo. Per dieta clinica, analisi alterate, farmaci, patologie o obiettivi importanti serve medico/nutrizionista. In caso di allergie vere, la web app aiuta a filtrare gli alimenti ma non può garantire l’assenza di contaminazioni: bisogna controllare sempre etichette e indicazioni mediche.
